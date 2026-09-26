@@ -1,0 +1,9 @@
+# Pengaturan untuk Cloudflare Workers (dipakai juga untuk memasang situs statis).
+# "npm run build" (Vite) menghasilkan folder dist/ — baris di bawah ini yang
+# memberi tahu Cloudflare untuk memasang isi folder itu sebagai situs statis.
+name = "sada"
+compatibility_date = "2026-08-08"
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"

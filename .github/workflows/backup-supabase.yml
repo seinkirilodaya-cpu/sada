@@ -1,0 +1,154 @@
+# =====================================================================
+#  BACKUP OTOMATIS DATABASE SEINKIRI
+#  Letakkan berkas ini di repo:  .github/workflows/backup-supabase.yml
+#
+#  Berjalan tiap hari pukul 03.00 WIB, setelah kafe tutup.
+#  Hasilnya bisa diunduh dari tab Actions di GitHub.
+#
+#  Rahasia yang wajib diisi di GitHub (Settings -> Secrets -> Actions):
+#    SUPABASE_DB_URL    connection string "Session pooler" (port 5432)
+#
+#  Rahasia opsional, untuk menjaga proyek tidak dijeda saat kafe libur panjang:
+#    SUPABASE_URL       https://xxxx.supabase.co
+#    SUPABASE_ANON_KEY  kunci anon public
+# =====================================================================
+
+name: Backup Supabase
+
+on:
+  schedule:
+    - cron: "0 20 * * *"      # 20.00 UTC = 03.00 WIB
+  workflow_dispatch: {}       # bisa dijalankan manual dari tab Actions
+
+concurrency:
+  group: backup-supabase
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    # pg_dump harus minimal sama versinya dengan Postgres di Supabase.
+    # Kalau muncul error "server version mismatch", naikkan angka ini.
+    container: postgres:17
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+
+    steps:
+      - name: Periksa connection string
+        run: |
+          if [ -z "$DB_URL" ]; then
+            echo "::error::Secret SUPABASE_DB_URL belum diisi."
+            exit 1
+          fi
+          case "$DB_URL" in
+            *pooler.supabase.com:5432*) echo "Connection string benar: Session pooler port 5432." ;;
+            *pooler.supabase.com:6543*)
+              echo "::error::Ini Transaction pooler (6543). pg_dump butuh Session pooler (5432)."
+              exit 1 ;;
+            *db.*.supabase.co*)
+              echo "::error::Ini koneksi langsung (IPv6). GitHub hanya bisa IPv4 — pakai Session pooler."
+              exit 1 ;;
+            *) echo "::warning::Format connection string tidak dikenali, tetap dicoba." ;;
+          esac
+
+      - name: Siapkan tanggal
+        id: tgl
+        run: |
+          # waktu WIB tanpa bergantung pada data zona waktu di container
+          echo "tanggal=$(date -u -d '+7 hours' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          echo "hari=$(date -u -d '+7 hours' +%d)"          >> "$GITHUB_OUTPUT"
+          mkdir -p backup
+
+      - name: Cadangkan data aplikasi (skema public)
+        run: |
+          pg_dump "$DB_URL" --schema=public --no-owner \
+            | gzip -9 > "backup/public-${{ steps.tgl.outputs.tanggal }}.sql.gz"
+
+      - name: Cadangkan akun login (auth.users dan auth.identities)
+        run: |
+          pg_dump "$DB_URL" --data-only --no-owner \
+            --table=auth.users --table=auth.identities \
+            | gzip -9 > "backup/auth-${{ steps.tgl.outputs.tanggal }}.sql.gz"
+
+      - name: Catat jumlah baris tiap tabel
+        run: |
+          psql "$DB_URL" -At -F ',' -v ON_ERROR_STOP=1 <<'SQL' > "backup/jumlah-baris-${{ steps.tgl.outputs.tanggal }}.csv"
+          select table_name,
+                 (xpath('/row/c/text()',
+                   query_to_xml(format('select count(*) as c from public.%I', table_name),
+                                false, true, '')))[1]::text::bigint
+          from information_schema.tables
+          where table_schema = 'public' and table_type = 'BASE TABLE'
+          order by 1;
+          SQL
+          echo "Jumlah baris per tabel:"
+          cat "backup/jumlah-baris-${{ steps.tgl.outputs.tanggal }}.csv"
+
+      - name: Periksa hasil backup tidak kosong
+        run: |
+          # Buka berkasnya sekali ke berkas sementara, lalu periksa dari situ.
+          # Jangan pakai "zcat | grep -q" — pada berkas besar, grep berhenti lebih
+          # dulu dan pipa dianggap gagal, sehingga tabel yang ada dikira hilang.
+          F="backup/public-${{ steps.tgl.outputs.tanggal }}.sql.gz"
+          zcat "$F" > /tmp/periksa.sql
+          JML_TABEL=$(grep -c '^CREATE TABLE public\.' /tmp/periksa.sql || true)
+          echo "Tabel tercadang: $JML_TABEL"
+          if [ "$JML_TABEL" -lt 15 ]; then
+            echo "::error::Hanya $JML_TABEL tabel yang tercadang. Seharusnya 20 lebih — backup dianggap gagal."
+            exit 1
+          fi
+          for t in karyawan bahan menu resep opname penjualan; do
+            if grep -q "^COPY public\.$t " /tmp/periksa.sql; then
+              echo "Data tabel $t: ada"
+            else
+              echo "::error::Data tabel $t tidak ada di backup."
+              exit 1
+            fi
+          done
+          rm -f /tmp/periksa.sql
+          ls -lh backup/
+
+      - name: Simpan backup harian (30 hari)
+        uses: actions/upload-artifact@v7
+        with:
+          name: backup-${{ steps.tgl.outputs.tanggal }}
+          path: backup/
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Simpan backup bulanan (90 hari)
+        if: steps.tgl.outputs.hari == '01'
+        uses: actions/upload-artifact@v7
+        with:
+          name: backup-bulanan-${{ steps.tgl.outputs.tanggal }}
+          path: backup/
+          retention-days: 90
+          if-no-files-found: error
+
+  jaga-aktif:
+    # Mencegah proyek gratis dijeda kalau kafe libur lebih dari seminggu.
+    # Dilewati otomatis kalau dua rahasia opsional tidak diisi.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+    steps:
+      - name: Kirim satu permintaan ke Supabase
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "Rahasia opsional tidak diisi, langkah ini dilewati."
+            exit 0
+          fi
+          KODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            "$SUPABASE_URL/rest/v1/grinder?select=id&limit=1" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY")
+          echo "Jawaban Supabase: $KODE"
