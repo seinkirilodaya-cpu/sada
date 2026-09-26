@@ -734,7 +734,7 @@ async function tulisNota(lama, baru, db) {
 }
 
 // Dulu SATU tulisPengaturan() dipakai untuk kelima pengaturan ini sekaligus
-// (uang service, jam kerja, dasar pembagian service, omzet online, jam
+// (uang bonus, jam kerja, dasar pembagian bonus, omzet online, jam
 // shift) -- setiap kali SATU saja berubah, kelimanya ditulis ulang bersama
 // memakai apa pun yang ada di db saat itu. Kalau dua orang mengubah
 // pengaturan BERBEDA nyaris bersamaan, yang menyimpan belakangan menimpa
@@ -1529,7 +1529,6 @@ function Ringkasan({ db, simpan, H, pesan }) {
   const kartu = [
     { l: "Beverage", d: H.bev, w: 0.25 },
     { l: "Food", d: H.food, w: 0.35 },
-    { l: "Online", d: H.online, w: 0.45 },
     { l: "Lainnya", d: H.lain, w: 0.35 },
   ];
 
@@ -1685,17 +1684,6 @@ function Ringkasan({ db, simpan, H, pesan }) {
         </Panel>
       </div>
 
-      <Panel judul="Omzet penjualan online" catatan="Isi total omzet bersih yang kamu terima dari seluruh penjualan online bulan ini, setelah potongan platform. Angka ini yang dipakai membagi HPP online menjadi COGS online.">
-        <div className="ks-inline-kiri">
-          <input type="number" value={db.omzetOnline || 0}
-            onChange={(e) => { simpan({ ...db, omzetOnline: parseFloat(e.target.value) || 0 }); pesan("Omzet online tersimpan."); }}
-            className="ks-mini-input" style={{ width: 150 }} />
-          <span className="ks-sub">
-            {H.online.qty ? `${num(H.online.qty, 0)} porsi online tercatat · HPP ${rp(H.online.hpp)} · COGS online ${H.online.omzet ? pct(H.online.cogs) : "menunggu omzet diisi"}` : "belum ada penjualan online pada rentang ini"}
-          </span>
-        </div>
-      </Panel>
-
       {H.biayaLacak > 0 && (
         <Panel judul="Pelacakan pemakaian" catatan="Menu bertanda pelacak bukan barang yang dijual — dipakai untuk menghitung berapa banyak kemasan yang keluar. Biayanya tetap masuk COGS, tapi tidak dihitung sebagai penjualan.">
           <table className="ks-tabel">
@@ -1748,10 +1736,10 @@ function RekapSales({ db, simpan, H, pesan, pesanHitung }) {
   // ("rows" -- bukan H.menu mentah) -- kalau lagi menyaring satu kategori,
   // yang terunduh cuma itu, bukan semua menu.
   const unduh = () => {
-    const kolom = ["Menu", "Kode", "Kategori", "Dine-in", "Online", "Harga", "HPP/porsi", "Omzet", "COGS (%)"];
+    const kolom = ["Menu", "Kode", "Kategori", "Dine-in", "Harga", "HPP/porsi", "Omzet", "COGS (%)"];
     const isi = rows.map((m) => [
       rapi(m.n), m.kode || "", m.lacak ? "PELACAK" : m.kat,
-      Math.round(m.qDine) || 0, Math.round(m.qOn) || 0,
+      Math.round(m.qDine) || 0,
       m.lacak ? "" : Math.round(m.p) || 0,
       Math.round(m.hpp) || 0,
       m.lacak ? "" : Math.round(m.omzet) || 0,
@@ -1783,7 +1771,7 @@ function RekapSales({ db, simpan, H, pesan, pesanHitung }) {
 
         <table className="ks-tabel">
           <thead>
-            <tr><th>Menu</th><th>Kategori</th><th className="r">Dine-in</th><th className="r">Online</th>
+            <tr><th>Menu</th><th>Kategori</th><th className="r">Dine-in</th>
               <th className="r">Harga</th><th className="r">HPP/porsi</th><th className="r">Omzet</th><th className="r">COGS</th></tr>
           </thead>
           <tbody>
@@ -1794,14 +1782,13 @@ function RekapSales({ db, simpan, H, pesan, pesanHitung }) {
                   <td>{m.lacak ? <span className="ks-tag netral">PELACAK</span>
                     : <span className={"ks-tag " + (m.kat === "FOOD" ? "kitchen" : "bar")}>{m.kat}</span>}</td>
                   <td className="r n">{num(m.qDine, 0)}</td>
-                  <td className="r n">{m.qOn ? num(m.qOn, 0) : "—"}</td>
                   <td className="r n">{m.lacak ? "—" : rpd(m.p)}</td>
                   <td className="r n">{rpd(m.hpp)}</td>
                   <td className="r n">{m.lacak ? "—" : rp(m.omzet)}</td>
                   <td className={"r n " + (m.cogs > 0.35 ? "minus" : m.cogs ? "plus" : "")}>{m.lacak ? "pelacak" : m.p ? pct(m.cogs) : "—"}</td>
                 </tr>
                 {buka === m.i && (
-                  <tr><td colSpan="8" className="ks-expand">
+                  <tr><td colSpan="7" className="ks-expand">
                     <div className="ks-expand-atas">
                       <div><b>{rapi(m.n)}</b> — isi jumlah terjual per tanggal</div>
                       <div className="ks-inline">
@@ -1819,20 +1806,18 @@ function RekapSales({ db, simpan, H, pesan, pesanHitung }) {
                         </label>
                       </div>
                     </div>
-                    {["d", "o"].map((kanal) => (
-                      <div key={kanal} className="ks-kanal">
-                        <div className="ks-kanal-label">{kanal === "d" ? "Dine-in" : "Online"}</div>
-                        <div className="ks-hari">
-                          {HARI.map((d) => (
-                            <label key={d} className="ks-hari-sel">
-                              <span>{d}</span>
-                              <input type="number" value={db.menu[m.i][kanal][d - 1] || ""} placeholder="0"
-                                onChange={(e) => setHari(m.i, kanal, d - 1, e.target.value)} />
-                            </label>
-                          ))}
-                        </div>
+                    <div className="ks-kanal">
+                      <div className="ks-kanal-label">Dine-in</div>
+                      <div className="ks-hari">
+                        {HARI.map((d) => (
+                          <label key={d} className="ks-hari-sel">
+                            <span>{d}</span>
+                            <input type="number" value={db.menu[m.i].d[d - 1] || ""} placeholder="0"
+                              onChange={(e) => setHari(m.i, "d", d - 1, e.target.value)} />
+                          </label>
+                        ))}
                       </div>
-                    ))}
+                    </div>
                     <div className="ks-expand-resep">
                       Resep: {m.r.length ? m.r.map(([i, g]) => `${rapi(db.bahan[i]?.n || "?")} ${num(g, 2)}`).join(" · ") : "belum ada"}
                     </div>
@@ -2459,8 +2444,8 @@ const KOLOM_UMUM_JEJAK = {
   kategori: "Kategori", detail: "Detail", kode: "Kode", pelacak: "Pelacak",
   target: "Target", deadline: "Tenggat", catatan: "Catatan",
   isi: "Isi kemasan", kemasan: "Kemasan", urgensi: "Urgensi", balasan: "Balasan",
-  service: "Service", omzet_online: "Omzet online", jam_kerja: "Jam kerja",
-  dasar_service: "Dasar service", shift: "Shift", item: "Item", tanggal: "Tanggal",
+  service: "Bonus", omzet_online: "Omzet online", jam_kerja: "Jam kerja",
+  dasar_service: "Dasar bonus", shift: "Shift", item: "Item", tanggal: "Tanggal",
   sesi: "Sesi", suhu_c: "Suhu", klik_grinder: "Grind size",
   toleransi_yield: "Toleransi yield", toleransi_waktu: "Toleransi waktu",
   dose_gram: "Dose", yield_gram: "Yield", waktu_detik: "Waktu ekstraksi",
@@ -3778,7 +3763,7 @@ function KaryawanHal({ db, simpan, pesan, peran, muatUlang }) {
   const kosongK2 = aktif.filter((k) => k.jenis !== "PART" && !(k.akhir || k.kontrakAkhir));
   return (
     <>
-      <Head judul="Karyawan" sub={`${aktif.length} orang · Bar ${aktif.filter((k) => k.divisi === "BAR").length} · Kitchen ${aktif.filter((k) => k.divisi === "FOOD").length} · beban tetap ${rp(beban)}/bulan, di luar part time dan service charge`} />
+      <Head judul="Karyawan" sub={`${aktif.length} orang · Bar ${aktif.filter((k) => k.divisi === "BAR").length} · Kitchen ${aktif.filter((k) => k.divisi === "FOOD").length} · beban tetap ${rp(beban)}/bulan, di luar part time dan bonus`} />
 
       {(lewat.length > 0 || kosongK2.length > 0) && (
         <div className="ks-banner">
@@ -3892,7 +3877,7 @@ function KaryawanHal({ db, simpan, pesan, peran, muatUlang }) {
                 {Object.keys(PERAN).map((r) => <option key={r} value={r}>{PERAN[r].label}</option>)}
               </select>
             </Field>
-            <Field label="Dapat service charge">
+            <Field label="Dapat bonus">
               <select value={form.service ? "ya" : "tidak"} onChange={(e) => setForm({ ...form, service: e.target.value === "ya" })}>
                 <option value="ya">Ya</option><option value="tidak">Tidak</option>
               </select>
@@ -3951,7 +3936,7 @@ function KaryawanHal({ db, simpan, pesan, peran, muatUlang }) {
             <Field label="Gaji pokok"><input type="number" value={tambah.gaji} onChange={(e) => setTambah({ ...tambah, gaji: e.target.value })} /></Field>
             <Field label="Tunjangan / bulan"><input type="number" value={tambah.tunjangan} onChange={(e) => setTambah({ ...tambah, tunjangan: e.target.value })} /></Field>
             <Field label="Target shift"><input type="number" value={tambah.target} onChange={(e) => setTambah({ ...tambah, target: e.target.value })} /></Field>
-            <Field label="Dapat service charge">
+            <Field label="Dapat bonus">
               <select value={tambah.service ? "ya" : "tidak"} onChange={(e) => setTambah({ ...tambah, service: e.target.value === "ya" })}>
                 <option value="ya">Ya</option><option value="tidak">Tidak</option>
               </select>
@@ -4587,14 +4572,13 @@ const SHIFT_AWAL = {
   S1: { nama: "Shift 1", jam: "09.30–16.30", durasi: 7, warna: "s1" },
   MD: { nama: "Middle", jam: "12.00–20.00", durasi: 8, warna: "md" },
   S2: { nama: "Shift 2", jam: "16.00–01.00", durasi: 9, warna: "s2" },
-  S3: { nama: "Shift 3", jam: "belum diatur", durasi: 7, warna: "s3" },
   OF: { nama: "Libur", jam: "—", durasi: 0, warna: "of" },
   CT: { nama: "Cuti", jam: "—", durasi: 0, warna: "ct" },
   IZ: { nama: "Izin", jam: "—", durasi: 0, warna: "iz" },
   SK: { nama: "Sakit", jam: "—", durasi: 0, warna: "sk" },
 };
-const URUT = ["S1", "MD", "S2", "S3", "OF", "CT", "IZ", "SK"];
-const KERJA = ["S1", "MD", "S2", "S3"];
+const URUT = ["S1", "MD", "S2", "OF", "CT", "IZ", "SK"];
+const KERJA = ["S1", "MD", "S2"];
 
 function shiftDef(db) {
   const s = (db && db.shift) || {};
@@ -4606,7 +4590,7 @@ const kunciJadwal = (id, d) => id + "-" + d;
 
 function rekapShift(db, kid, dari, sampai) {
   const SH = shiftDef(db);
-  const k = { S1: 0, MD: 0, S2: 0, S3: 0, OF: 0, CT: 0, IZ: 0, SK: 0 };
+  const k = { S1: 0, MD: 0, S2: 0, OF: 0, CT: 0, IZ: 0, SK: 0 };
   let n = 0, jam = 0;
   for (let d = dari; d <= sampai; d++) {
     const s = db.jadwal[kunciJadwal(kid, d)];
@@ -4843,7 +4827,7 @@ function Gaji({ db, simpan, pesan, pesanHitung, peran }) {
       Math.round(b.termin1),
     ]);
 
-    const kolomT2 = ["Karyawan", "Posisi", "Terima service", "Hari masuk", "Dari (hari)", "Jam kerja",
+    const kolomT2 = ["Karyawan", "Posisi", "Terima bonus", "Hari masuk", "Dari (hari)", "Jam kerja",
       ...(dasar === "poin" ? ["Poin"] : []), "Porsi (%)", "Dibayar (tgl 16)"];
     const isiT2 = baris.map((b) => [
       b.nama, b.posisi, b.service ? "Ya" : "Tidak", b.hariMasuk, hariBulan, b.jamKerjaAktual,
@@ -4867,7 +4851,7 @@ function Gaji({ db, simpan, pesan, pesanHitung, peran }) {
 
   return (
     <>
-      <Head judul="Penggajian" sub={`${namaPeriode(db.aktif)} · tanggal 1 untuk gaji pokok, tunjangan, dan lembur; tanggal 16 untuk service charge.`} />
+      <Head judul="Penggajian" sub={`${namaPeriode(db.aktif)} · tanggal 1 untuk gaji pokok, tunjangan, dan lembur; tanggal 16 untuk bonus.`} />
 
       <div className="ks-baris-aksi kanan">
         <button className="ks-btn kecil" onClick={unduh}><Download size={13} /> Unduh Excel</button>
@@ -4875,7 +4859,7 @@ function Gaji({ db, simpan, pesan, pesanHitung, peran }) {
 
       <div className="ks-kpi">
         <Kpi label="Dibayar tanggal 1" nilai={rp(t1)} sub={`${baris.length} karyawan`} />
-        <Kpi label="Dibayar tanggal 16" nilai={rp(t2)} sub={`service untuk ${penerima.length} orang`} />
+        <Kpi label="Dibayar tanggal 16" nilai={rp(t2)} sub={`bonus untuk ${penerima.length} orang`} />
         <Kpi label="Total sebulan" nilai={rp(t1 + t2)} sub="sebelum potongan BPJS dan PPh 21" />
         <Kpi label="Jam lembur" nilai={`${num(totalJam, 1)} jam`} sub={`senilai ${rp(sum(baris.map((b) => b.uangLembur)))}`} nada={totalJam > 0 ? "warn" : "ok"} />
       </div>
@@ -4883,23 +4867,23 @@ function Gaji({ db, simpan, pesan, pesanHitung, peran }) {
       {belumJadwal > 0 && (
         <div className="ks-banner rapat">
           <AlertTriangle size={16} />
-          <div><b>{belumJadwal} karyawan belum punya jadwal</b> di {namaPeriode(db.aktif)}, jadi hari masuk dan service-nya terhitung nol.</div>
+          <div><b>{belumJadwal} karyawan belum punya jadwal</b> di {namaPeriode(db.aktif)}, jadi hari masuk dan bonus-nya terhitung nol.</div>
         </div>
       )}
 
       <Panel judul="Dasar perhitungan">
         <div className="ks-form">
-          <Field label="Uang service bulan ini">
+          <Field label="Uang bonus bulan ini">
             <input type="number" value={db.service || 0} disabled={!bisaUbah}
-              onChange={(e) => { simpan({ ...db, service: parseFloat(e.target.value) || 0 }); pesan("Uang service tersimpan."); }} />
+              onChange={(e) => { simpan({ ...db, service: parseFloat(e.target.value) || 0 }); pesan("Uang bonus tersimpan."); }} />
           </Field>
           <Field label="Jam kerja per hari">
             <input type="number" step="any" value={db.jamKerja ?? 7} disabled={!bisaUbah}
               onChange={(e) => { simpan({ ...db, jamKerja: parseFloat(e.target.value) || 7 }); pesan("Jam kerja per hari tersimpan."); }} />
           </Field>
-          <Field label="Dasar pembagian service">
+          <Field label="Dasar pembagian bonus">
             <select value={dasar} disabled={!bisaUbah}
-              onChange={(e) => { simpan({ ...db, dasarService: e.target.value }); pesan("Dasar pembagian service tersimpan."); }}>
+              onChange={(e) => { simpan({ ...db, dasarService: e.target.value }); pesan("Dasar pembagian bonus tersimpan."); }}>
               {Object.entries(DASAR_SERVICE).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </select>
           </Field>
@@ -4938,8 +4922,8 @@ function Gaji({ db, simpan, pesan, pesanHitung, peran }) {
         <div className="ks-sub" style={{ marginTop: 8 }}>Jam lembur diisi head divisi masing-masing di halaman Jadwal shift.</div>
       </Panel>
 
-      <Panel judul="Tanggal 16 — service charge"
-        catatan={`Uang service dibagi habis sebanding dengan ${DASAR_SERVICE[dasar].label.toLowerCase()}. Total bobot seluruh penerima bulan ini: ${num(totalBobot, 0)}.`}>
+      <Panel judul="Tanggal 16 — bonus"
+        catatan={`Uang bonus dibagi habis sebanding dengan ${DASAR_SERVICE[dasar].label.toLowerCase()}. Total bobot seluruh penerima bulan ini: ${num(totalBobot, 0)}.`}>
         <table className="ks-tabel">
           <thead><tr><th className="r">Terima</th><th>Karyawan</th><th className="r">Hari masuk</th>
             <th className="r">Jam kerja</th>{dasar === "poin" && <th className="r">Poin</th>}
@@ -4966,7 +4950,7 @@ function Gaji({ db, simpan, pesan, pesanHitung, peran }) {
           <tfoot><tr><td colSpan={dasar === "poin" ? 6 : 5} className="r">Total dibayar tanggal 16</td><td className="r n"><b>{rp(t2)}</b></td></tr></tfoot>
         </table>
         <div className="ks-sub" style={{ marginTop: 8 }}>
-          Centang untuk mengatur siapa yang menerima service bulan ini. Begitu daftar penerimanya berubah, porsi semua orang dihitung ulang — uangnya tetap terbagi habis.
+          Centang untuk mengatur siapa yang menerima bonus bulan ini. Begitu daftar penerimanya berubah, porsi semua orang dihitung ulang — uangnya tetap terbagi habis.
           Porsi seseorang juga bergerak kalau kehadiran rekannya berubah, karena pembaginya adalah total bobot semua penerima.
         </div>
       </Panel>
@@ -5007,7 +4991,7 @@ function PanelShift({ db, simpan, pesan }) {
 
   return (
     <Panel judul="Pengaturan shift"
-      catatan="Nama, jam, dan durasi tiap shift. Durasi dipakai menghitung total jam kerja, tarif lembur, dan pembagian service kalau dasarnya jam kerja.">
+      catatan="Nama, jam, dan durasi tiap shift. Durasi dipakai menghitung total jam kerja, tarif lembur, dan pembagian bonus kalau dasarnya jam kerja.">
       <table className="ks-tabel rapat">
         <thead><tr><th>Kode</th><th>Nama</th><th>Jam</th><th className="r">Durasi (jam)</th></tr></thead>
         <tbody>
@@ -5025,8 +5009,8 @@ function PanelShift({ db, simpan, pesan }) {
         <AlertTriangle size={15} />
         <div>
           {seragam
-            ? <>Ketiga shift berdurasi <b>{num(durasi[0], 1)} jam</b>. Selama panjangnya sama, membagi service menurut hari masuk dan menurut jam kerja memberi hasil yang persis sama.</>
-            : <>Durasi shift belum seragam ({durasi.map((d) => num(d, 1)).join(" · ")} jam). Selama masih begini, membagi service menurut <b>jam kerja</b> lebih adil daripada menurut hari masuk.</>}
+            ? <>Ketiga shift berdurasi <b>{num(durasi[0], 1)} jam</b>. Selama panjangnya sama, membagi bonus menurut hari masuk dan menurut jam kerja memberi hasil yang persis sama.</>
+            : <>Durasi shift belum seragam ({durasi.map((d) => num(d, 1)).join(" · ")} jam). Selama masih begini, membagi bonus menurut <b>jam kerja</b> lebih adil daripada menurut hari masuk.</>}
         </div>
       </div>
     </Panel>
@@ -5206,7 +5190,7 @@ function CutiIzin({ db, aku, peran, pesan, absen, muatAbsen, muatUlang }) {
   };
 
   // Tanggal dalam rentang r yang jatuh di periode yang sedang dimuat (db.aktif)
-  // dan TIDAK ADA anggota lain di divisi yang sama dijadwalkan masuk (S1/MD/S2/S3).
+  // dan TIDAK ADA anggota lain di divisi yang sama dijadwalkan masuk (S1/MD/S2).
   // Di luar db.aktif tidak bisa dicek -- jadwal bulan itu belum dimuat.
   const tanggalTanpaBackup = (r) => {
     const target = db.karyawan.find((k) => k.id === r.karyawan_id);
@@ -7576,7 +7560,6 @@ function bikinNotif(db, H, aku, peran, absen) {
       teks: `COGS real ${pct(H.cogsReal)}, lebih tinggi ${pct(gap)} dari resep`, detail: `selisih setara ${rp(gap * H.omzet)}` });
     const janggal = H.bahan.filter((b) => b.janggal);
     if (janggal.length) n.push({ hal: "bahan", jenis: "kuning", teks: `${janggal.length} bahan satuan belanjanya belum cocok`, detail: janggal.map((b) => rapi(b.n)).join(", ") });
-    if (!db.omzetOnline && H.online.qty) n.push({ hal: "ringkasan", jenis: "kuning", teks: "Omzet penjualan online belum diisi", detail: `${num(H.online.qty, 0)} porsi online tercatat tanpa nilai omzet` });
   }
 
   // Cuti/izin/sakit (lihat CutiIzin) -- "absen" sudah otomatis terbatas sesuai
@@ -8685,7 +8668,7 @@ function Laporan({ db, simpan, pesan, pesanHitung, H, peran }) {
     ["item", "Diskon", parseFloat(L.diskon) || 0, R.p(parseFloat(L.diskon) || 0)],
     ["item", "Diskon 100%", parseFloat(L.diskon100) || 0, R.p(parseFloat(L.diskon100) || 0)],
     ["total", "NET SALES", R.netSales, R.p(R.netSales)],
-    ["item", "Service", parseFloat(L.service) || 0, R.p(parseFloat(L.service) || 0)],
+    ["item", "Bonus", parseFloat(L.service) || 0, R.p(parseFloat(L.service) || 0)],
     ["item", "Tax", parseFloat(L.tax) || 0, R.p(parseFloat(L.tax) || 0)],
     ["item", "Rounding", parseFloat(L.rounding) || 0, R.p(parseFloat(L.rounding) || 0)],
     ["total", "JUMLAH PEMASUKAN", R.jumlahPemasukan, ""],
@@ -8798,7 +8781,7 @@ function Laporan({ db, simpan, pesan, pesanHitung, H, peran }) {
           <Panel judul="Pemasukan" catatan="Ambil dari laporan kasir harian. Diskon dan diskon 100% ditulis sebagai angka positif — sistem yang mengurangkannya.">
             <div className="ks-form">
               {BARIS_PEMASUKAN.map(([k, l]) => <F key={k} k={k} label={l} />)}
-              <F k="service" label="Service" />
+              <F k="service" label="Bonus" />
               <F k="tax" label="Tax" />
               <F k="rounding" label="Rounding" />
             </div>
@@ -9895,7 +9878,7 @@ function SlipGaji({ db, aku }) {
 
       <div className="ks-kpi">
         <Kpi label="Tanggal 1" nilai={rp(b.termin1)} sub="pokok, tunjangan, lembur" />
-        <Kpi label="Tanggal 16" nilai={b.service ? rp(b.service) : "—"} sub={b.service ? "service charge" : "tidak menerima service"} />
+        <Kpi label="Tanggal 16" nilai={b.service ? rp(b.service) : "—"} sub={b.service ? "bonus" : "tidak menerima bonus"} />
         <Kpi label="Total bulan ini" nilai={rp(b.total)} sub="sebelum potongan" nada="ok" />
         <Kpi label="Kehadiran" nilai={`${b.hariMasuk} hari`} sub={`${b.jamKerjaAktual} jam kerja`} />
       </div>
@@ -9915,15 +9898,15 @@ function SlipGaji({ db, aku }) {
           </table>
         </Panel>
 
-        <Panel judul="Tanggal 16 — service" catatan={`Dibagi menurut ${DASAR_SERVICE[G.dasar].label.toLowerCase()}, dan selalu habis terbagi.`}>
+        <Panel judul="Tanggal 16 — bonus" catatan={`Dibagi menurut ${DASAR_SERVICE[G.dasar].label.toLowerCase()}, dan selalu habis terbagi.`}>
           {!b.service ? (
-            <Kosong teks="Posisi ini tidak termasuk penerima service charge." />
+            <Kosong teks="Posisi ini tidak termasuk penerima bonus." />
           ) : (
             <table className="ks-tabel">
               <tbody>
-                <tr><td>Uang service seluruhnya<div className="ks-sub">dikumpulkan sebulan</div></td><td className="r n">{rp(G.kolam)}</td></tr>
+                <tr><td>Uang bonus seluruhnya<div className="ks-sub">dikumpulkan sebulan</div></td><td className="r n">{rp(G.kolam)}</td></tr>
                 <tr><td>Bagianmu<div className="ks-sub">{dasarTeks} dari total {num(G.totalBobot, 0)} seluruh penerima</div></td><td className="r n">{pct(b.porsi)}</td></tr>
-                <tr><td>Penerima service<div className="ks-sub">bulan ini</div></td><td className="r n">{G.penerima.length} orang</td></tr>
+                <tr><td>Penerima bonus<div className="ks-sub">bulan ini</div></td><td className="r n">{G.penerima.length} orang</td></tr>
               </tbody>
               <tfoot><tr><td className="r">Diterima tanggal 16</td><td className="r n"><b>{rp(b.service)}</b></td></tr></tfoot>
             </table>
@@ -10302,7 +10285,7 @@ function bacaTanggal(teks) {
 
 function ImporPOS({ db, simpan, pesan }) {
   const [baca, setBaca] = useState(null);      // hasil pembacaan berkas
-  const [kanal, setKanal] = useState("d");     // d = dine-in, o = online
+  const kanal = "d";                            // cuma dine-in, tidak ada kanal online
   const [caraIsi, setCaraIsi] = useState("ganti");
   const [sibuk, setSibuk] = useState(false);
   const [terapkanSibuk, setTerapkanSibuk] = useState(false);
@@ -10496,12 +10479,6 @@ function ImporPOS({ db, simpan, pesan }) {
 
           <Panel judul="Pengaturan penerapan">
             <div className="ks-form">
-              <Field label="Masuk sebagai">
-                <select value={kanal} onChange={(e) => setKanal(e.target.value)}>
-                  <option value="d">Dine-in</option>
-                  <option value="o">Online</option>
-                </select>
-              </Field>
               <Field label="Kalau tanggal itu sudah ada isinya">
                 <select value={caraIsi} onChange={(e) => setCaraIsi(e.target.value)}>
                   <option value="ganti">Ganti — timpa angka lama</option>
