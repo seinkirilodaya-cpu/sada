@@ -9210,7 +9210,7 @@ function ProduksiRingkasan({ periode }) {
   );
 }
 
-function ProduksiHal({ db, pesan, aku, peran, setNav }) {
+function ProduksiHal({ db, pesan, aku, peran, setNav, muatUlang }) {
   const [tab, setTab] = useState("catat");
   const bisaAturResep = ["OWNER", "HEAD_BAR", "HEAD_KITCHEN"].includes(peran);
   // Owner (biasanya divisi OTHER) melihat resep semua divisi; head dan staff
@@ -9236,9 +9236,9 @@ function ProduksiHal({ db, pesan, aku, peran, setNav }) {
         ))}
       </div>
 
-      {tab === "catat" && <ProduksiCatatTab db={db} pesan={pesan} aku={aku} divisiFilter={divisiFilter} />}
-      {tab === "riwayat" && <ProduksiRiwayatTab pesan={pesan} peran={peran} divisiFilter={divisiFilter} />}
-      {tab === "kadaluarsa" && <ProduksiKadaluarsaTab pesan={pesan} />}
+      {tab === "catat" && <ProduksiCatatTab db={db} pesan={pesan} aku={aku} divisiFilter={divisiFilter} muatUlang={muatUlang} />}
+      {tab === "riwayat" && <ProduksiRiwayatTab pesan={pesan} peran={peran} divisiFilter={divisiFilter} muatUlang={muatUlang} />}
+      {tab === "kadaluarsa" && <ProduksiKadaluarsaTab pesan={pesan} muatUlang={muatUlang} />}
       {tab === "resep" && bisaAturResep && <ProduksiResepTab db={db} pesan={pesan} setNav={setNav} />}
     </>
   );
@@ -9248,7 +9248,7 @@ function ProduksiHal({ db, pesan, aku, peran, setNav }) {
 // dari hasil seharusnya, tampilkan peringatan kuning (boleh tetap disimpan).
 const AMBANG_SELISIH_PRODUKSI = 0.10;
 
-function ProduksiCatatTab({ db, pesan, aku, divisiFilter }) {
+function ProduksiCatatTab({ db, pesan, aku, divisiFilter, muatUlang }) {
   const [resepList, setResepList] = useState(null); // null = sedang memuat
   const [resepBahanSemua, setResepBahanSemua] = useState(null);
   const [resepMeta, setResepMeta] = useState(null); // id -> bahan_hasil_id (resep_produksi_daftar tidak mengembalikannya)
@@ -9355,6 +9355,8 @@ function ProduksiCatatTab({ db, pesan, aku, divisiFilter }) {
     if (error) { pesan(`Gagal menyimpan: ${error.message}`, "alert"); return; }
     pesan("Produksi tercatat.");
     resetFormResep();
+    muatUlang?.(); // db.bahan (live stock) dimuat sekali saat aplikasi dibuka -- tanpa ini,
+    // Live Stock/Master Bahan tetap menunjukkan angka lama sampai halaman dimuat ulang.
   };
 
   const simpanBebas = async () => {
@@ -9382,6 +9384,7 @@ function ProduksiCatatTab({ db, pesan, aku, divisiFilter }) {
     if (eBahan) { pesan(`Prep tersimpan, tapi bahan bakunya gagal tersimpan: ${eBahan.message}`, "alert"); return; }
     pesan("Produksi tercatat.");
     resetFormBebas();
+    muatUlang?.();
   };
 
   if (resepList === null) return <Splash tahap="Memuat resep produksi…" />;
@@ -9484,7 +9487,7 @@ function ProduksiCatatTab({ db, pesan, aku, divisiFilter }) {
   );
 }
 
-function ProduksiRiwayatTab({ pesan, peran, divisiFilter }) {
+function ProduksiRiwayatTab({ pesan, peran, divisiFilter, muatUlang }) {
   const bisaHapus = ["OWNER", "HEAD_BAR", "HEAD_KITCHEN"].includes(peran);
 
   const hariIni = () => new Date().toISOString().slice(0, 10);
@@ -9527,6 +9530,7 @@ function ProduksiRiwayatTab({ pesan, peran, divisiFilter }) {
     if (error) { pesan(`Gagal menghapus: ${error.message}`, "alert"); return; }
     pesan("Catatan produksi dihapus.");
     setRows((r) => r.filter((x) => x.id !== id));
+    muatUlang?.();
   };
 
   return (
@@ -9612,7 +9616,7 @@ function ProduksiRiwayatTab({ pesan, peran, divisiFilter }) {
   );
 }
 
-function ProduksiKadaluarsaTab({ pesan }) {
+function ProduksiKadaluarsaTab({ pesan, muatUlang }) {
   const [hari, setHari] = useState(7);
   const [kartu, setKartu] = useState(null); // null = sedang memuat
   const [bahanMap, setBahanMap] = useState({}); // produksi_id -> bahan_hasil_id
@@ -9659,6 +9663,7 @@ function ProduksiKadaluarsaTab({ pesan }) {
     if (error) { pesan(`Gagal menyimpan: ${error.message}`, "alert"); return false; }
     pesan("Terbuang dicatat.");
     muat();
+    muatUlang?.();
   };
 
   if (kartu === null) return <Splash tahap="Memuat…" />;
