@@ -6,7 +6,7 @@ import {
   Search, Pencil, ChevronRight, CalendarDays, GraduationCap, ClipboardList, Moon, HeartHandshake, Bell,
   PackagePlus as PackagePlus2, FileBarChart, Wallet, Receipt, Menu, ChevronDown, Download, Upload,
   Eye, EyeOff, ArrowLeft, RefreshCw, CalendarOff, Printer, TrendingDown, MoreVertical,
-  Coffee, Star, Grid2x2, History, TrendingUp, Truck,
+  Coffee, Star, Grid2x2, History, TrendingUp, Truck, FlaskConical,
 } from "lucide-react";
 import { supabase, supabaseSiap } from "./supabase.js";
 
@@ -207,12 +207,17 @@ async function muatDb(periode, lapor, tahap) {
   if (eBahan) throw eBahan;
   const petaBahan = new Map(bahanRows.map((b, i) => [b.id, i]));
 
-  const [{ data: belanjaRows, error: eBelanja }, { data: opnameRows, error: eOpname }] = await Promise.all([
+  const [{ data: belanjaRows, error: eBelanja }, { data: opnameRows, error: eOpname },
+         { data: produksiRows, error: eProduksi }, { data: produksiBuangRows, error: eProduksiBuang }] = await Promise.all([
     supabase.from("belanja").select("*").eq("periode", periode),
     supabase.from("opname").select("*").eq("periode", periode),
+    supabase.from("produksi").select("id,tanggal,bahan_hasil_id,hasil_nyata").eq("periode", periode),
+    supabase.from("produksi_buang").select("tanggal,bahan_id,qty").eq("periode", periode),
   ]);
   if (eBelanja) throw eBelanja;
   if (eOpname) throw eOpname;
+  if (eProduksi) console.warn(`[muatDb] gagal memuat "produksi": ${eProduksi.message}`);
+  if (eProduksiBuang) console.warn(`[muatDb] gagal memuat "produksi_buang": ${eProduksiBuang.message}`);
 
   const belanjaPerBahan = {};
   (belanjaRows || []).forEach((r) => {
@@ -220,6 +225,32 @@ async function muatDb(periode, lapor, tahap) {
   });
   const opnamePerBahan = {};
   (opnameRows || []).forEach((r) => { (opnamePerBahan[r.bahan_id] ||= {})[r.sesi] = r; });
+
+  // Sambungan Produksi -> live stock (lihat migrasi/39-produksi.sql):
+  // prep dicatat -> bahan baku berkurang, hasil prep bertambah. tanggal di
+  // tabel produksi/produksi_buang adalah tanggal kalender penuh, bukan nomor
+  // hari seperti di "belanja" -- diambil nomor harinya di sini (hariDariTanggal)
+  // supaya bisa dipakai bareng b.hari (format [hari, qty]) di hitung().
+  const hariDariTanggal = (s) => parseInt(String(s).slice(-2), 10);
+  const idProduksiKeHari = new Map((produksiRows || []).map((r) => [r.id, hariDariTanggal(r.tanggal)]));
+  const produksiIds = (produksiRows || []).map((r) => r.id);
+  const produksiBahanRows = produksiIds.length
+    ? await ambilAman("produksi_bahan", supabase.from("produksi_bahan").select("produksi_id,bahan_id,qty").in("produksi_id", produksiIds), lapor)
+    : [];
+
+  const produksiTambahPerBahan = {};
+  (produksiRows || []).forEach((r) => {
+    (produksiTambahPerBahan[r.bahan_hasil_id] ||= []).push([hariDariTanggal(r.tanggal), parseFloat(r.hasil_nyata) || 0]);
+  });
+  const produksiKurangPerBahan = {};
+  produksiBahanRows.forEach((r) => {
+    const hari = idProduksiKeHari.get(r.produksi_id);
+    if (hari === undefined) return;
+    (produksiKurangPerBahan[r.bahan_id] ||= []).push([hari, parseFloat(r.qty) || 0]);
+  });
+  (produksiBuangRows || []).forEach((r) => {
+    (produksiKurangPerBahan[r.bahan_id] ||= []).push([hariDariTanggal(r.tanggal), parseFloat(r.qty) || 0]);
+  });
 
   const bahan = bahanRows.map((b) => {
     const o = opnamePerBahan[b.id] || {};
@@ -235,6 +266,8 @@ async function muatDb(periode, lapor, tahap) {
       ket: o.akhir?.keterangan || "",
       spoil: 0,
       hari: (belanjaPerBahan[b.id] || []).sort((x, y) => x[0] - y[0]),
+      produksiTambah: produksiTambahPerBahan[b.id] || [],
+      produksiKurang: produksiKurangPerBahan[b.id] || [],
       kemasan: kemasanArray(b.kemasan),
     };
   });
@@ -1009,6 +1042,19 @@ function hitung(db, dari = 1, sampai = 31) {
   const beliSampai = (d) => B.map((b) => sum(b.hari.filter((h) => h[0] <= d).map((x) => x[1])));
   const beli16 = beliSampai(16);
 
+  // Dampak Produksi (prep/batch) ke live stock -- lihat migrasi/39-produksi.sql.
+  // Hasil prep yang jadi (mis. Cold Brew) menambah stok bahan itu; bahan baku
+  // yang terpakai untuk membuatnya + hasil prep yang terbuang mengurangi stok
+  // bahan itu. Disatukan ke rumus yang sama dengan belanja/pemakaian menu di
+  // bawah -- sengaja tidak dibuat rumus stok kedua yang terpisah.
+  const jumlahkanSampai = (arr, d) => sum(arr.filter((h) => h[0] <= d).map((x) => x[1]));
+  const produksiTambahQty = B.map((b) => sum((b.produksiTambah || []).filter(dalam).map((x) => x[1])));
+  const produksiKurangQty = B.map((b) => sum((b.produksiKurang || []).filter(dalam).map((x) => x[1])));
+  const produksiTambah16 = B.map((b) => jumlahkanSampai(b.produksiTambah || [], 16));
+  const produksiKurang16 = B.map((b) => jumlahkanSampai(b.produksiKurang || [], 16));
+  const produksiTambahBulan = B.map((b) => sum((b.produksiTambah || []).map((x) => x[1])));
+  const produksiKurangBulan = B.map((b) => sum((b.produksiKurang || []).map((x) => x[1])));
+
   const pakaiRange = B.map(() => 0), pakai16 = B.map(() => 0), pakaiBulan = B.map(() => 0);
   const qOnBulan = sum(M.map((m) => sum(m.o)));
 
@@ -1028,13 +1074,15 @@ function hitung(db, dari = 1, sampai = 31) {
   });
 
   const bahan = B.map((b, i) => {
-    const seharusnya = b.awal + beliQty[i] - pakaiRange[i];
-    const s16 = b.awal + beli16[i] - pakai16[i];
-    const sAkhir = b.awal + beliQtyBulan[i] - pakaiBulan[i];
+    const seharusnya = b.awal + beliQty[i] - pakaiRange[i] + produksiTambahQty[i] - produksiKurangQty[i];
+    const s16 = b.awal + beli16[i] - pakai16[i] + produksiTambah16[i] - produksiKurang16[i];
+    const sAkhir = b.awal + beliQtyBulan[i] - pakaiBulan[i] + produksiTambahBulan[i] - produksiKurangBulan[i];
     const fisik16 = b.fisik16 || 0;
     return { ...b, i, h: hEff[i], hTersimpan: b.h, otomatis: otomatis[i], janggal: janggal[i], hHitung: hHitung[i],
       beliQty: beliQty[i], beliRp: beliRp[i], beliQtyBulan: beliQtyBulan[i], beliRpBulan: beliRpBulan[i],
-      pakai: pakaiRange[i], pakaiBulan: pakaiBulan[i], seharusnya, s16, sAkhir, fisik16,
+      pakai: pakaiRange[i], pakaiBulan: pakaiBulan[i],
+      produksiTambahQty: produksiTambahQty[i], produksiKurangQty: produksiKurangQty[i],
+      seharusnya, s16, sAkhir, fisik16,
       selisih16: fisik16 ? fisik16 - s16 : 0, selisih16Rp: fisik16 ? (fisik16 - s16) * hEff[i] : 0,
       selisih: b.fisik - sAkhir, selisihRp: (b.fisik - sAkhir) * hEff[i],
       nilaiAwal: b.awal * hEff[i], nilaiAkhir: b.fisik * hEff[i],
@@ -1351,6 +1399,7 @@ export default function App() {
     { id: "impor", label: "Impor dari POS", icon: Upload },
     { id: "belanja", label: "Belanja", icon: PackagePlus },
     { id: "live", label: "Live stock", icon: Boxes },
+    { id: "produksi", label: "Produksi", icon: FlaskConical },
     { id: "so", label: "SO opname detail", icon: ClipboardCheck },
     { id: "harian", label: "Opname harian", icon: Moon },
     { id: "dialin", label: "Dial in", icon: Coffee },
@@ -1369,6 +1418,8 @@ export default function App() {
     { id: "jejak", label: "Jejak perubahan", icon: History },
   ].filter((n) => n.id === "dialin"
     ? (["OWNER", "HEAD_BAR", "FINANCE"].includes(peran) || aku.divisi === "BAR")
+    : n.id === "produksi"
+    ? (["OWNER", "HEAD_BAR", "HEAD_KITCHEN"].includes(peran) || ["BAR", "FOOD"].includes(aku.divisi))
     : bolehLihat(peran, n.id));
   const halaman = NAVS.some((n) => n.id === nav) ? nav : NAVS[0]?.id;
   const P = { db, simpan, pesan, pesanHitung, H, range, setRange, aku, peran, muatUlang, absen, muatAbsen, setNav, lompatMenu, setLompatMenu };
@@ -1437,6 +1488,7 @@ export default function App() {
         {halaman === "impor" && <ImporPOS db={db} simpan={simpan} pesan={pesan} />}
         {halaman === "belanja" && <BelanjaHal {...P} />}
         {halaman === "live" && <LiveStock {...P} />}
+        {halaman === "produksi" && <ProduksiHal {...P} />}
         {halaman === "so" && <SoBalance {...P} />}
         {halaman === "resep" && <Resep {...P} />}
         {halaman === "bahan" && <MasterBahan {...P} />}
@@ -2843,7 +2895,7 @@ function LiveStock({ H }) {
 
   return (
     <>
-      <Head judul="Live stock" sub="Stok awal + belanja − terpakai. Angka minus berarti pemakaian tercatat melebihi barang yang ada — biasanya resep atau data belanja yang belum akurat." />
+      <Head judul="Live stock" sub="Stok awal + belanja − terpakai menu ± produksi. Angka minus berarti pemakaian tercatat melebihi barang yang ada — biasanya resep atau data belanja yang belum akurat." />
 
       {minus > 0 && (
         <div className="ks-banner">
@@ -2865,18 +2917,24 @@ function LiveStock({ H }) {
         </div>
       }>
         <table className="ks-tabel">
-          <thead><tr><th>Bahan</th><th className="r">Stok awal</th><th className="r">Belanja</th><th className="r">Terpakai</th><th className="r">Live stock</th><th className="r">Nilai</th></tr></thead>
+          <thead><tr><th>Bahan</th><th className="r">Stok awal</th><th className="r">Belanja</th><th className="r">Terpakai</th><th className="r">Produksi</th><th className="r">Live stock</th><th className="r">Nilai</th></tr></thead>
           <tbody>
-            {rows.map((b) => (
+            {rows.map((b) => {
+              const netProduksi = (b.produksiTambahQty || 0) - (b.produksiKurangQty || 0);
+              return (
               <tr key={b.n}>
                 <td>{rapi(b.n)}<div className="ks-sub">{b.u.toLowerCase()} · {b.bar ? "Bar" : "Kitchen"}</div></td>
                 <td className="r n">{num(b.awal, 0)}</td>
                 <td className="r n">{num(b.beliQty, 0)}</td>
                 <td className="r n">{num(b.pakai, 0)}</td>
+                <td className="r n" title={`+${num(b.produksiTambahQty || 0, 0)} hasil prep, −${num(b.produksiKurangQty || 0, 0)} bahan terpakai/terbuang untuk prep`}>
+                  {netProduksi ? (netProduksi > 0 ? "+" : "") + num(netProduksi, 0) : "–"}
+                </td>
                 <td className={"r n " + (b.seharusnya < 0 ? "minus" : "")}>{num(b.seharusnya, 0)}</td>
                 <td className="r n">{rp(b.seharusnya * b.h)}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </Panel>
@@ -4316,11 +4374,11 @@ font-family:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;color:var(--in
 .ks-brand-mark.big{font-size:40px;color:var(--hijau);}
 .ks-brand-name{font-size:16px;font-weight:700;letter-spacing:-.02em;color:#fff;}
 .ks-brand-sub{font-size:10.5px;color:#8B9A91;letter-spacing:.05em;text-transform:uppercase;}
-.ks-side nav{display:flex;flex-direction:column;gap:2px;}
+.ks-side nav{display:flex;flex-direction:column;gap:2px;flex:1;min-height:0;overflow-y:auto;}
 .ks-nav{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;border:0;border-radius:7px;background:transparent;color:#B9C6BE;font:inherit;font-size:13px;cursor:pointer;text-align:left;transition:.14s;}
 .ks-nav:hover{background:rgba(255,255,255,.07);color:#fff;}
 .ks-nav.on{background:var(--hijau);color:#fff;font-weight:600;}
-.ks-side-note{margin-top:auto;padding:12px;border-radius:9px;background:rgba(255,255,255,.05);font-size:10.5px;color:#8B9A91;text-transform:uppercase;letter-spacing:.05em;}
+.ks-side-note{margin-top:auto;flex-shrink:0;padding:12px;border-radius:9px;background:rgba(255,255,255,.05);font-size:10.5px;color:#8B9A91;text-transform:uppercase;letter-spacing:.05em;}
 .ks-side-note b{display:block;font-family:var(--mono);font-size:26px;letter-spacing:-.04em;margin:3px 0;text-transform:none;}
 .ks-side-note b.baik{color:#7BC49B;}.ks-side-note b.buruk{color:#F0C979;}
 .ks-side-sub{text-transform:none;letter-spacing:0;font-size:10.5px;line-height:1.5;}
@@ -5467,7 +5525,7 @@ const divisiPeran = (p) => (p === "HEAD_BAR" ? "BAR" : p === "HEAD_KITCHEN" ? "F
 const GRUP_NAV = [
   { judul: "RINGKASAN", ids: ["ringkasan", "laporan", "analisis", "harga", "kinerja"] },
   { judul: "PENJUALAN", ids: ["sales", "impor", "resep", "dialin"] },
-  { judul: "STOK & BELANJA", ids: ["request", "belanja", "live", "harian", "so", "bahan", "pengeluaran"] },
+  { judul: "STOK & BELANJA", ids: ["request", "belanja", "live", "produksi", "harian", "so", "bahan", "pengeluaran"] },
   { judul: "ORANG", ids: ["jadwal", "absen", "gaji", "slip", "kuis", "peer", "karyawan"] },
   { judul: "SISTEM", ids: ["ekspor", "jejak"] },
 ];
@@ -9082,6 +9140,748 @@ function GrafikKlik({ data }) {
       <text x={pad} y={13} fontSize="10" fill="var(--kabur)">{max}</text>
       <text x={pad} y={h - 4} fontSize="10" fill="var(--kabur)">{min}</text>
     </svg>
+  );
+}
+
+/* ============================================================
+   PRODUKSI — pencatatan preparation/batch (cold brew, simple syrup,
+   saus, ayam marinasi, dst). Lihat migrasi/39-produksi.sql untuk skema
+   dan aturan aksesnya; halaman ini cuma menyembunyikan tombol yang
+   memang tidak berlaku, aturan sesungguhnya dijaga RLS di database.
+   ============================================================ */
+// Ringkasan angka di atas halaman -- terpisah dari 4 tab di bawahnya karena
+// perlu tetap kelihatan mau lagi di tab mana pun. Gagal memuat tidak
+// menghalangi tab-tab lain, jadi kalau errornya nyata cukup disembunyikan.
+function ProduksiRingkasan({ periode }) {
+  const [ringkas, setRingkas] = useState(null); // null = memuat, false = gagal
+  const [buang, setBuang] = useState([]);
+
+  useEffect(() => {
+    let hidup = true;
+    setRingkas(null); setBuang([]);
+    supabase.rpc("produksi_ringkas", { p_periode: periode }).then(({ data, error }) => {
+      if (!hidup) return;
+      if (error) { console.error("[Produksi] gagal memuat ringkasan:", error); setRingkas(false); return; }
+      setRingkas(data || {});
+    });
+    supabase.rpc("produksi_buang_ringkas", { p_periode: periode }).then(({ data, error }) => {
+      if (!hidup) return;
+      if (error) { console.error("[Produksi] gagal memuat ringkasan terbuang:", error); return; }
+      setBuang(data || []);
+    });
+    return () => { hidup = false; };
+  }, [periode]);
+
+  if (ringkas === null) return <div className="ks-kpi">{Array.from({ length: 4 }).map((_, i) => <KerangkaAngka key={i} />)}</div>;
+  if (ringkas === false) return null;
+
+  const rataSelisih = ringkas.selisih_hasil_rata;
+
+  return (
+    <>
+      <div className="ks-kpi">
+        <Kpi label="Produksi bulan ini" nilai={num(ringkas.jumlah_produksi || 0, 0)} sub={`${num(ringkas.jenis_prep || 0, 0)} jenis prep`} />
+        <Kpi label="Biaya bahan" nilai={"Rp " + rpk(ringkas.biaya_bahan || 0)} sub="terpakai untuk produksi" />
+        <Kpi label="Nilai terbuang" nilai={"Rp " + rpk(ringkas.terbuang_nilai || 0)} sub={`${num(ringkas.terbuang_kejadian || 0, 0)} kejadian`}
+          nada={ringkas.terbuang_nilai > 0 ? "warn" : "ok"} />
+        <Kpi label="Rata-rata selisih hasil" nilai={rataSelisih == null ? "—" : (rataSelisih > 0 ? "+" : "") + num(rataSelisih, 1) + "%"}
+          sub="hasil nyata vs seharusnya" nada={rataSelisih != null && Math.abs(rataSelisih) > 10 ? "warn" : "ok"} />
+      </div>
+
+      {buang.length > 0 && (
+        <Panel judul="Paling banyak terbuang bulan ini">
+          <table className="ks-tabel">
+            <thead><tr><th>Prep</th><th className="r">Kejadian</th><th className="r">Jumlah</th><th className="r">Nilai</th><th>Alasan terbanyak</th></tr></thead>
+            <tbody>
+              {buang.map((b) => (
+                <tr key={b.bahan}>
+                  <td>{rapi(b.bahan)}</td>
+                  <td className="r n">{num(b.kejadian, 0)}</td>
+                  <td className="r n">{num(b.total_qty, 0)} {(b.satuan || "").toLowerCase()}</td>
+                  <td className="r n">{rp(b.nilai)}</td>
+                  <td>{rapi(b.alasan_terbanyak || "")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+    </>
+  );
+}
+
+function ProduksiHal({ db, pesan, aku, peran, setNav }) {
+  const [tab, setTab] = useState("catat");
+  const bisaAturResep = ["OWNER", "HEAD_BAR", "HEAD_KITCHEN"].includes(peran);
+  // Owner (biasanya divisi OTHER) melihat resep semua divisi; head dan staff
+  // BAR/FOOD dibatasi ke divisinya sendiri saja -- sama seperti pola di Dial In.
+  const divisiFilter = ["BAR", "FOOD"].includes(aku.divisi) ? aku.divisi : null;
+
+  const TABS = [
+    { id: "catat", label: "Catat produksi" },
+    { id: "riwayat", label: "Riwayat" },
+    { id: "kadaluarsa", label: "Akan kedaluwarsa" },
+    ...(bisaAturResep ? [{ id: "resep", label: "Resep produksi" }] : []),
+  ];
+
+  return (
+    <>
+      <Head judul="Produksi" sub="Pencatatan prep/batch -- cold brew, simple syrup, saus, dan sejenisnya. Bahan baku berkurang saat prep dicatat, bukan menunggu menunya terjual." />
+
+      <ProduksiRingkasan periode={db.aktif} />
+
+      <div className="ks-dial-pilihan">
+        {TABS.map((t) => (
+          <button key={t.id} className={"ks-btn kecil" + (tab === t.id ? " utama" : "")} onClick={() => setTab(t.id)}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === "catat" && <ProduksiCatatTab db={db} pesan={pesan} aku={aku} divisiFilter={divisiFilter} />}
+      {tab === "riwayat" && <ProduksiRiwayatTab pesan={pesan} peran={peran} divisiFilter={divisiFilter} />}
+      {tab === "kadaluarsa" && <ProduksiKadaluarsaTab pesan={pesan} />}
+      {tab === "resep" && bisaAturResep && <ProduksiResepTab db={db} pesan={pesan} setNav={setNav} />}
+    </>
+  );
+}
+
+// Ambang peringatan hasil menyimpang -- lihat spesifikasi: lebih dari 10%
+// dari hasil seharusnya, tampilkan peringatan kuning (boleh tetap disimpan).
+const AMBANG_SELISIH_PRODUKSI = 0.10;
+
+function ProduksiCatatTab({ db, pesan, aku, divisiFilter }) {
+  const [resepList, setResepList] = useState(null); // null = sedang memuat
+  const [resepBahanSemua, setResepBahanSemua] = useState(null);
+  const [resepMeta, setResepMeta] = useState(null); // id -> bahan_hasil_id (resep_produksi_daftar tidak mengembalikannya)
+  const [mode, setMode] = useState("resep"); // resep | tanpa
+
+  const muatResep = () => {
+    setResepList(null);
+    supabase.rpc("resep_produksi_daftar", { p_divisi: divisiFilter }).then(({ data, error }) => {
+      if (error) { console.error("[Produksi] gagal memuat resep produksi:", error); pesan(`Gagal memuat resep produksi: ${error.message}`, "alert"); setResepList([]); return; }
+      setResepList(data || []);
+    });
+  };
+  useEffect(muatResep, [divisiFilter]);
+
+  useEffect(() => {
+    supabase.from("resep_produksi").select("id,bahan_hasil_id").then(({ data, error }) => {
+      if (error) { console.error("[Produksi] gagal memuat resep_produksi:", error); setResepMeta({}); return; }
+      const m = {}; (data || []).forEach((r) => { m[r.id] = r.bahan_hasil_id; });
+      setResepMeta(m);
+    });
+  }, []);
+
+  useEffect(() => {
+    supabase.from("resep_produksi_bahan").select("resep_id,bahan_id,qty").then(({ data, error }) => {
+      if (error) { console.error("[Produksi] gagal memuat bahan resep produksi:", error); setResepBahanSemua([]); return; }
+      setResepBahanSemua(data || []);
+    });
+  }, []);
+
+  const cariBahan = (id) => db.bahan.find((b) => b.id === id) || null;
+
+  // ---- Mode "pakai resep" ----
+  const [resepId, setResepId] = useState("");
+  const [batch, setBatch] = useState("1");
+  const [hasilNyata, setHasilNyata] = useState("");
+  const [hasilManual, setHasilManual] = useState(false);
+  const [tanggal, setTanggal] = useState(() => new Date().toISOString().slice(0, 10));
+  const [catatan, setCatatan] = useState("");
+  const [sibuk, setSibuk] = useState(false);
+
+  const resepDipilih = (resepList || []).find((r) => r.id === resepId) || null;
+  const bahanResepDipilih = (resepBahanSemua || [])
+    .filter((x) => x.resep_id === resepId)
+    .map((x) => ({ ...x, bahan: cariBahan(x.bahan_id) }));
+
+  const hasilSeharusnya = resepDipilih && batch !== "" ? resepDipilih.hasil_qty * parseFloat(batch) : null;
+
+  // Isi otomatis hasil nyata mengikuti hasil seharusnya -- berhenti begitu
+  // orangnya sendiri yang mengetik ke kolom itu (lihat onChange hasilNyata).
+  useEffect(() => {
+    if (hasilManual) return;
+    if (hasilSeharusnya == null || isNaN(hasilSeharusnya)) return;
+    setHasilNyata(String(Math.round(hasilSeharusnya * 100) / 100));
+  }, [resepId, batch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const gantiResep = (id) => { setResepId(id); setHasilManual(false); };
+  const gantiBatch = (v) => { setBatch(v); setHasilManual(false); };
+
+  const selisihPersen = hasilSeharusnya && hasilNyata !== ""
+    ? (parseFloat(hasilNyata) - hasilSeharusnya) / hasilSeharusnya : null;
+  const perluPeringatan = selisihPersen != null && Math.abs(selisihPersen) > AMBANG_SELISIH_PRODUKSI;
+
+  // ---- Mode "tanpa resep" ----
+  const [bahanHasilId, setBahanHasilId] = useState("");
+  const [hasilNyataBebas, setHasilNyataBebas] = useState("");
+  const [tanggalBebas, setTanggalBebas] = useState(() => new Date().toISOString().slice(0, 10));
+  const [catatanBebas, setCatatanBebas] = useState("");
+  const [barisBahan, setBarisBahan] = useState([{ bahanId: "", qty: "" }]);
+  const [sibukBebas, setSibukBebas] = useState(false);
+
+  const ubahBaris = (i, field, v) => setBarisBahan((rows) => rows.map((r, idx) => (idx === i ? { ...r, [field]: v } : r)));
+  const tambahBaris = () => setBarisBahan((rows) => [...rows, { bahanId: "", qty: "" }]);
+  const hapusBaris = (i) => setBarisBahan((rows) => rows.filter((_, idx) => idx !== i));
+
+  const resetFormResep = () => {
+    setBatch("1"); setHasilManual(false); setCatatan("");
+    // resepId dan tanggal SENGAJA dibiarkan -- sering dipakai mencatat
+    // beberapa batch resep yang sama berturut-turut di hari yang sama.
+  };
+  const resetFormBebas = () => {
+    setBahanHasilId(""); setHasilNyataBebas(""); setCatatanBebas("");
+    setBarisBahan([{ bahanId: "", qty: "" }]);
+  };
+
+  const simpanResep = async () => {
+    if (!resepId) { pesan("Pilih resep produksi dulu.", "alert"); return; }
+    const bahanHasil = (resepMeta || {})[resepId];
+    if (!bahanHasil) { pesan("Bahan hasil resep ini belum termuat, coba lagi sebentar.", "alert"); return; }
+    const b = parseFloat(batch);
+    if (!(b > 0)) { pesan("Jumlah batch harus lebih dari 0.", "alert"); return; }
+    const hn = parseFloat(hasilNyata);
+    if (!(hn >= 0)) { pesan("Isi hasil nyata.", "alert"); return; }
+
+    setSibuk(true);
+    const { error } = await supabase.from("produksi").insert({
+      resep_id: resepId,
+      bahan_hasil_id: bahanHasil,
+      batch: b,
+      hasil_nyata: hn,
+      tanggal,
+      catatan: catatan.trim() || null,
+    });
+    setSibuk(false);
+    if (error) { pesan(`Gagal menyimpan: ${error.message}`, "alert"); return; }
+    pesan("Produksi tercatat.");
+    resetFormResep();
+  };
+
+  const simpanBebas = async () => {
+    if (!bahanHasilId) { pesan("Pilih bahan hasilnya dulu.", "alert"); return; }
+    const hn = parseFloat(hasilNyataBebas);
+    if (!(hn >= 0)) { pesan("Isi hasil nyata.", "alert"); return; }
+    const baris = barisBahan.filter((r) => r.bahanId && parseFloat(r.qty) > 0);
+    if (!baris.length) { pesan("Tambahkan minimal satu bahan baku yang dipakai.", "alert"); return; }
+
+    setSibukBebas(true);
+    const { data, error } = await supabase.from("produksi").insert({
+      resep_id: null,
+      bahan_hasil_id: bahanHasilId,
+      batch: 1,
+      hasil_nyata: hn,
+      tanggal: tanggalBebas,
+      catatan: catatanBebas.trim() || null,
+    }).select("id").single();
+    if (error) { setSibukBebas(false); pesan(`Gagal menyimpan: ${error.message}`, "alert"); return; }
+
+    const { error: eBahan } = await supabase.from("produksi_bahan").insert(
+      baris.map((r) => ({ produksi_id: data.id, bahan_id: r.bahanId, qty: parseFloat(r.qty) }))
+    );
+    setSibukBebas(false);
+    if (eBahan) { pesan(`Prep tersimpan, tapi bahan bakunya gagal tersimpan: ${eBahan.message}`, "alert"); return; }
+    pesan("Produksi tercatat.");
+    resetFormBebas();
+  };
+
+  if (resepList === null) return <Splash tahap="Memuat resep produksi…" />;
+
+  return (
+    <Panel judul={mode === "resep" ? "Catat produksi" : "Catat produksi (tanpa resep)"}
+      aksi={
+        <div className="ks-dial-pilihan">
+          <button className={"ks-btn kecil" + (mode === "resep" ? " utama" : "")} onClick={() => setMode("resep")}>Pakai resep</button>
+          <button className={"ks-btn kecil" + (mode === "tanpa" ? " utama" : "")} onClick={() => setMode("tanpa")}>Tanpa resep</button>
+        </div>
+      }>
+      {mode === "resep" ? (
+        resepList.length === 0 ? (
+          <Kosong teks="Belum ada resep produksi untuk divisimu. Minta head atau owner menambahkannya dulu di tab Resep produksi." />
+        ) : (
+          <div className="ks-form">
+            <Field label="Resep produksi" lebar>
+              <select value={resepId} onChange={(e) => gantiResep(e.target.value)}>
+                <option value="">— pilih —</option>
+                {resepList.map((r) => <option key={r.id} value={r.id}>{rapi(r.nama)}</option>)}
+              </select>
+              {resepDipilih && (
+                <div className="ks-sub">
+                  1 batch = {num(resepDipilih.hasil_qty)} {resepDipilih.satuan.toLowerCase()}
+                  {bahanResepDipilih.length > 0 && <> · butuh {bahanResepDipilih.map((x) => `${rapi(x.bahan?.n || "?")} ${num(x.qty)} ${(x.bahan?.u || "").toLowerCase()}`).join(", ")}</>}
+                  {resepDipilih.umur_simpan_hari != null && <> · tahan {resepDipilih.umur_simpan_hari} hari</>}
+                </div>
+              )}
+            </Field>
+
+            <Field label="Jumlah batch">
+              <input type="number" step="0.01" min="0" value={batch} onChange={(e) => gantiBatch(e.target.value)} />
+            </Field>
+
+            <Field label={`Hasil nyata${resepDipilih ? ` (${resepDipilih.satuan.toLowerCase()})` : ""}`}>
+              <input type="number" step="0.01" min="0" value={hasilNyata}
+                onChange={(e) => { setHasilNyata(e.target.value); setHasilManual(true); }} />
+              {hasilSeharusnya != null && <div className="ks-sub">Seharusnya {num(hasilSeharusnya)} {resepDipilih?.satuan.toLowerCase()}</div>}
+            </Field>
+
+            <Field label="Tanggal">
+              <input type="date" value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
+            </Field>
+
+            <Field label="Catatan (opsional)" lebar>
+              <input value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="Mis. rendam 16 jam, suhu ruang" />
+            </Field>
+
+            {perluPeringatan && (
+              <div className="ks-banner rapat" style={{ gridColumn: "1/-1" }}>
+                <AlertTriangle size={15} />
+                <div>Hasilnya {num(Math.abs(selisihPersen * 100), 0)}% {selisihPersen < 0 ? "di bawah" : "di atas"} biasanya. Yakin angkanya benar?</div>
+              </div>
+            )}
+
+            <TombolSibuk className="ks-btn utama" sibuk={sibuk} teksSibuk="Menyimpan…" onClick={simpanResep} style={{ gridColumn: "1/-1" }}>Simpan</TombolSibuk>
+          </div>
+        )
+      ) : (
+        <div className="ks-form">
+          <Field label="Bahan hasil" lebar>
+            <select value={bahanHasilId} onChange={(e) => setBahanHasilId(e.target.value)}>
+              <option value="">— pilih —</option>
+              {db.bahan.map((b) => <option key={b.id} value={b.id}>{rapi(b.n)}</option>)}
+            </select>
+          </Field>
+
+          <Field label="Hasil nyata">
+            <input type="number" step="0.01" min="0" value={hasilNyataBebas} onChange={(e) => setHasilNyataBebas(e.target.value)} />
+          </Field>
+
+          <Field label="Tanggal">
+            <input type="date" value={tanggalBebas} onChange={(e) => setTanggalBebas(e.target.value)} />
+          </Field>
+
+          <Field label="Catatan (opsional)" lebar>
+            <input value={catatanBebas} onChange={(e) => setCatatanBebas(e.target.value)} />
+          </Field>
+
+          <div style={{ gridColumn: "1/-1", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="ks-sub" style={{ marginTop: 8 }}>Bahan baku yang dipakai</div>
+            {barisBahan.map((r, i) => (
+              <div key={i} className="ks-inline">
+                <select value={r.bahanId} onChange={(e) => ubahBaris(i, "bahanId", e.target.value)} style={{ flex: 1 }}>
+                  <option value="">— pilih bahan —</option>
+                  {db.bahan.map((b) => <option key={b.id} value={b.id}>{rapi(b.n)}</option>)}
+                </select>
+                <input type="number" step="0.01" min="0" placeholder="Qty" value={r.qty} onChange={(e) => ubahBaris(i, "qty", e.target.value)} className="ks-mini-input" />
+                {barisBahan.length > 1 && <button className="ks-ikon" onClick={() => hapusBaris(i)}><Trash2 size={14} /></button>}
+              </div>
+            ))}
+            <button className="ks-btn kecil" onClick={tambahBaris} style={{ alignSelf: "flex-start" }}><Plus size={13} /> Tambah bahan</button>
+          </div>
+
+          <TombolSibuk className="ks-btn utama" sibuk={sibukBebas} teksSibuk="Menyimpan…" onClick={simpanBebas} style={{ gridColumn: "1/-1" }}>Simpan</TombolSibuk>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function ProduksiRiwayatTab({ pesan, peran, divisiFilter }) {
+  const bisaHapus = ["OWNER", "HEAD_BAR", "HEAD_KITCHEN"].includes(peran);
+
+  const hariIni = () => new Date().toISOString().slice(0, 10);
+  const hariLalu = (n) => { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); };
+
+  const [dari, setDari] = useState(hariLalu(30));
+  const [sampai, setSampai] = useState(hariIni());
+  const [div, setDiv] = useState(divisiFilter || "SEMUA");
+  const [rows, setRows] = useState(null); // null = sedang memuat
+  const [buka, setBuka] = useState(null); // id baris yang rinciannya sedang terbuka
+  const [rinci, setRinci] = useState({}); // id -> baris rinci (null = sedang memuat)
+  const [hapusSibuk, setHapusSibuk] = useState(null); // id yang sedang dihapus
+
+  const muat = () => {
+    setRows(null);
+    supabase.rpc("produksi_daftar", { p_dari: dari, p_sampai: sampai, p_divisi: div === "SEMUA" ? null : div })
+      .then(({ data, error }) => {
+        if (error) { console.error("[Produksi] gagal memuat riwayat:", error); pesan(`Gagal memuat riwayat: ${error.message}`, "alert"); setRows([]); return; }
+        setRows(data || []);
+      });
+  };
+  useEffect(muat, [dari, sampai, div]);
+
+  const bukaBaris = (id) => {
+    if (buka === id) { setBuka(null); return; }
+    setBuka(id);
+    if (rinci[id] !== undefined) return;
+    setRinci((r) => ({ ...r, [id]: null }));
+    supabase.rpc("produksi_bahan_rinci", { p_produksi_id: id }).then(({ data, error }) => {
+      if (error) { console.error("[Produksi] gagal memuat rincian bahan:", error); pesan(`Gagal memuat rincian: ${error.message}`, "alert"); setRinci((r) => ({ ...r, [id]: [] })); return; }
+      setRinci((r) => ({ ...r, [id]: data || [] }));
+    });
+  };
+
+  const hapusBaris = async (id, hasilNama) => {
+    if (!confirm(`Hapus catatan produksi "${hasilNama}" ini? Tidak bisa dibatalkan.`)) return;
+    setHapusSibuk(id);
+    const { error } = await supabase.from("produksi").delete().eq("id", id);
+    setHapusSibuk(null);
+    if (error) { pesan(`Gagal menghapus: ${error.message}`, "alert"); return; }
+    pesan("Catatan produksi dihapus.");
+    setRows((r) => r.filter((x) => x.id !== id));
+  };
+
+  return (
+    <Panel judul={rows ? `${rows.length} catatan produksi` : "Riwayat produksi"}
+      aksi={
+        <div className="ks-inline">
+          <input type="date" value={dari} onChange={(e) => setDari(e.target.value)} className="ks-mini-input" />
+          <span className="ks-sub">s/d</span>
+          <input type="date" value={sampai} onChange={(e) => setSampai(e.target.value)} className="ks-mini-input" />
+          <select value={div} onChange={(e) => setDiv(e.target.value)} className="ks-mini-input">
+            <option value="SEMUA">Bar & Kitchen</option><option value="BAR">Bar</option><option value="FOOD">Kitchen</option>
+          </select>
+        </div>
+      }>
+      {rows === null ? (
+        <Splash tahap="Memuat riwayat produksi…" />
+      ) : rows.length === 0 ? (
+        <Kosong teks="Belum ada catatan produksi pada rentang ini." />
+      ) : (
+        <table className="ks-tabel">
+          <thead>
+            <tr>
+              <th>Tanggal</th><th>Hasil</th><th className="r">Batch</th>
+              <th className="r">Seharusnya</th><th className="r">Nyata</th><th className="r">Selisih</th>
+              <th className="r">Biaya bahan</th><th className="r">Biaya/satuan</th>
+              <th>Oleh</th><th>Kadaluarsa</th>{bisaHapus && <th></th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <Fragment key={r.id}>
+                <tr className="ks-klik" onClick={() => bukaBaris(r.id)}>
+                  <td>{r.tanggal}</td>
+                  <td><b>{rapi(r.hasil)}</b><div className="ks-sub">{r.resep ? rapi(r.resep) : "tanpa resep"} · {r.divisi === "BAR" ? "Bar" : "Kitchen"}</div></td>
+                  <td className="r n">{num(r.batch)}</td>
+                  <td className="r n">{r.hasil_seharusnya != null ? num(r.hasil_seharusnya) : "—"}</td>
+                  <td className="r n">{num(r.hasil_nyata)} {r.satuan?.toLowerCase()}</td>
+                  <td className={"r n " + (r.selisih_persen > 0 ? "plus" : r.selisih_persen < 0 ? "minus" : "")}>
+                    {r.selisih_persen != null ? `${r.selisih_persen > 0 ? "+" : ""}${num(r.selisih_persen, 1)}%` : "—"}
+                  </td>
+                  <td className="r n">{rp(r.biaya_bahan)}</td>
+                  <td className="r n">{r.biaya_per_satuan != null ? rpd(r.biaya_per_satuan) : "—"}</td>
+                  <td>{r.oleh || "—"}</td>
+                  <td className={r.sisa_hari != null && r.sisa_hari <= 0 ? "minus" : ""}>
+                    {r.kadaluarsa ? `${r.kadaluarsa}${r.sisa_hari != null ? ` (${r.sisa_hari <= 0 ? "lewat" : `${r.sisa_hari} hari lagi`})` : ""}` : "—"}
+                  </td>
+                  {bisaHapus && (
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <IkonSibuk sibuk={hapusSibuk === r.id} ikon={<Trash2 size={14} />} onClick={() => hapusBaris(r.id, r.hasil)} />
+                    </td>
+                  )}
+                </tr>
+                {buka === r.id && (
+                  <tr><td colSpan={bisaHapus ? 11 : 10} className="ks-expand">
+                    {rinci[r.id] === null ? (
+                      <Splash tahap="Memuat rincian…" />
+                    ) : rinci[r.id].length === 0 ? (
+                      <Kosong teks="Tidak ada rincian bahan untuk catatan ini." />
+                    ) : (
+                      <table className="ks-tabel">
+                        <thead><tr><th>Bahan</th><th className="r">Dipakai</th><th className="r">Seharusnya</th><th className="r">Selisih</th><th className="r">Biaya</th></tr></thead>
+                        <tbody>
+                          {rinci[r.id].map((b) => (
+                            <tr key={b.bahan_id}>
+                              <td>{rapi(b.bahan)}</td>
+                              <td className="r n">{num(b.qty)} {b.satuan?.toLowerCase()}</td>
+                              <td className="r n">{b.qty_resep != null ? `${num(b.qty_resep)} ${b.satuan?.toLowerCase()}` : "—"}</td>
+                              <td className={"r n " + (b.selisih > 0 ? "plus" : b.selisih < 0 ? "minus" : "")}>{b.selisih ? num(b.selisih) : "—"}</td>
+                              <td className="r n">{rp(b.biaya)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </td></tr>
+                )}
+              </Fragment>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </Panel>
+  );
+}
+
+function ProduksiKadaluarsaTab({ pesan }) {
+  const [hari, setHari] = useState(7);
+  const [kartu, setKartu] = useState(null); // null = sedang memuat
+  const [bahanMap, setBahanMap] = useState({}); // produksi_id -> bahan_hasil_id
+
+  const muat = () => {
+    setKartu(null);
+    supabase.rpc("produksi_kadaluarsa", { p_hari: hari }).then(({ data, error }) => {
+      if (error) { console.error("[Produksi] gagal memuat yang kedaluwarsa:", error); pesan(`Gagal memuat: ${error.message}`, "alert"); setKartu([]); return; }
+      const list = data || [];
+      setKartu(list);
+      if (!list.length) { setBahanMap({}); return; }
+      // produksi_kadaluarsa() tidak mengembalikan bahan_hasil_id (cuma nama
+      // hasilnya) -- diambil lagi di sini karena produksi_buang.bahan_id wajib diisi.
+      supabase.from("produksi").select("id,bahan_hasil_id").in("id", list.map((k) => k.id)).then(({ data: d2, error: e2 }) => {
+        if (e2) { console.error("[Produksi] gagal memuat bahan_hasil_id:", e2); return; }
+        const m = {}; (d2 || []).forEach((x) => { m[x.id] = x.bahan_hasil_id; });
+        setBahanMap(m);
+      });
+    });
+  };
+  useEffect(muat, [hari]);
+
+  const [formBuang, setFormBuang] = useState(null);
+  const [qty, setQty] = useState("");
+  const [alasan, setAlasan] = useState("Kedaluwarsa");
+  const [catatan, setCatatan] = useState("");
+
+  const bukaBuang = (k) => {
+    setFormBuang(k);
+    setQty(String(k.hasil_nyata));
+    setAlasan("Kedaluwarsa");
+    setCatatan("");
+  };
+
+  const simpanBuang = async () => {
+    const q = parseFloat(qty);
+    if (!(q > 0)) { pesan("Isi jumlah yang terbuang.", "alert"); return false; }
+    const bahanId = bahanMap[formBuang.id];
+    if (!bahanId) { pesan("Data bahannya belum termuat, coba lagi sebentar.", "alert"); return false; }
+    const { error } = await supabase.from("produksi_buang").insert({
+      bahan_id: bahanId, qty: q, alasan, produksi_id: formBuang.id,
+      catatan: catatan.trim() || null,
+    });
+    if (error) { pesan(`Gagal menyimpan: ${error.message}`, "alert"); return false; }
+    pesan("Terbuang dicatat.");
+    muat();
+  };
+
+  if (kartu === null) return <Splash tahap="Memuat…" />;
+
+  return (
+    <>
+      <Panel judul={`${kartu.length} prep akan/sudah kedaluwarsa`}
+        aksi={
+          <Field label="Dalam berapa hari">
+            <input type="number" min="0" value={hari} onChange={(e) => setHari(parseInt(e.target.value) || 0)} className="ks-mini-input" style={{ width: 60 }} />
+          </Field>
+        }>
+        {kartu.length === 0 ? (
+          <Kosong teks="Tidak ada prep yang mendekati kedaluwarsa." />
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(220px,1fr))", gap: 12 }}>
+            {kartu.map((k) => {
+              const lewat = k.sisa_hari != null && k.sisa_hari <= 0;
+              return (
+                <div key={k.id} className="ks-panel" style={{ margin: 0, ...(lewat ? { borderColor: "var(--merah)" } : {}) }}>
+                  <b>{rapi(k.hasil)}</b>
+                  <div className="ks-sub">{k.divisi === "BAR" ? "Bar" : "Kitchen"} · dibuat {k.tanggal}</div>
+                  <div className={"n " + (lewat ? "minus" : "")} style={{ fontWeight: 700, marginTop: 6 }}>
+                    {lewat ? "Sudah lewat" : `${k.sisa_hari} hari lagi`}
+                  </div>
+                  <div className="ks-sub">kadaluarsa {k.kadaluarsa}</div>
+                  <div style={{ marginTop: 6 }}>{num(k.hasil_nyata)} {k.satuan?.toLowerCase()} · oleh {k.oleh || "—"}</div>
+                  <button className="ks-btn kecil" style={{ marginTop: 10 }} onClick={() => bukaBuang(k)}>Catat terbuang</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      {formBuang && (
+        <Modal judul={`Catat terbuang — ${rapi(formBuang.hasil)}`} tutup={() => setFormBuang(null)} simpan={simpanBuang}>
+          <div className="ks-form">
+            <Field label={`Jumlah (${formBuang.satuan?.toLowerCase()})`}>
+              <input type="number" step="0.01" min="0" value={qty} onChange={(e) => setQty(e.target.value)} />
+            </Field>
+            <Field label="Alasan">
+              <select value={alasan} onChange={(e) => setAlasan(e.target.value)}>
+                <option>Kedaluwarsa</option><option>Tumpah</option><option>Gagal</option><option>Lain-lain</option>
+              </select>
+            </Field>
+            <Field label="Catatan (opsional)" lebar>
+              <input value={catatan} onChange={(e) => setCatatan(e.target.value)} />
+            </Field>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function ProduksiResepTab({ db, pesan, setNav }) {
+  const [div, setDiv] = useState("SEMUA");
+  const [list, setList] = useState(null); // null = sedang memuat
+
+  const muat = () => {
+    setList(null);
+    supabase.rpc("resep_produksi_daftar", { p_divisi: div === "SEMUA" ? null : div }).then(({ data, error }) => {
+      if (error) { console.error("[Produksi] gagal memuat resep produksi:", error); pesan(`Gagal memuat: ${error.message}`, "alert"); setList([]); return; }
+      setList(data || []);
+    });
+  };
+  useEffect(muat, [div]);
+
+  const [form, setForm] = useState(null); // null = tertutup
+  const [sedangMuatForm, setSedangMuatForm] = useState(false);
+
+  const bukaTambah = () => setForm({
+    id: null, nama: "", bahanHasilId: "", hasilQty: "", umurSimpan: "", catatan: "",
+    baris: [{ bahanId: "", qty: "" }],
+  });
+
+  const bukaUbah = async (r) => {
+    setSedangMuatForm(true);
+    const [{ data: rp, error: e1 }, { data: rb, error: e2 }] = await Promise.all([
+      supabase.from("resep_produksi").select("*").eq("id", r.id).single(),
+      supabase.from("resep_produksi_bahan").select("bahan_id,qty").eq("resep_id", r.id),
+    ]);
+    setSedangMuatForm(false);
+    if (e1 || e2) { pesan(`Gagal memuat resep: ${(e1 || e2).message}`, "alert"); return; }
+    setForm({
+      id: rp.id, nama: rp.nama, bahanHasilId: rp.bahan_hasil_id,
+      hasilQty: String(rp.hasil_qty), umurSimpan: rp.umur_simpan_hari != null ? String(rp.umur_simpan_hari) : "",
+      catatan: rp.catatan || "",
+      baris: rb && rb.length ? rb.map((x) => ({ bahanId: x.bahan_id, qty: String(x.qty) })) : [{ bahanId: "", qty: "" }],
+    });
+  };
+
+  const ubahBaris = (i, field, v) => setForm((f) => ({ ...f, baris: f.baris.map((r, idx) => (idx === i ? { ...r, [field]: v } : r)) }));
+  const tambahBaris = () => setForm((f) => ({ ...f, baris: [...f.baris, { bahanId: "", qty: "" }] }));
+  const hapusBarisForm = (i) => setForm((f) => ({ ...f, baris: f.baris.filter((_, idx) => idx !== i) }));
+
+  const bahanHasilTerpilih = form ? db.bahan.find((b) => b.id === form.bahanHasilId) : null;
+
+  const simpanForm = async () => {
+    if (!form.nama.trim()) { pesan("Isi nama resep.", "alert"); return false; }
+    if (!form.bahanHasilId) { pesan("Pilih bahan hasilnya.", "alert"); return false; }
+    const hasilQty = parseFloat(form.hasilQty);
+    if (!(hasilQty > 0)) { pesan("Isi hasil per batch.", "alert"); return false; }
+    const baris = form.baris.filter((r) => r.bahanId && parseFloat(r.qty) > 0);
+    if (!baris.length) { pesan("Tambahkan minimal satu bahan baku.", "alert"); return false; }
+    const dup = new Set(baris.map((r) => r.bahanId));
+    if (dup.size !== baris.length) { pesan("Ada bahan baku yang dipilih dua kali.", "alert"); return false; }
+
+    const payload = {
+      nama: form.nama.trim(),
+      bahan_hasil_id: form.bahanHasilId,
+      hasil_qty: hasilQty,
+      umur_simpan_hari: form.umurSimpan !== "" ? parseInt(form.umurSimpan) : null,
+      divisi: bahanHasilTerpilih?.bar ? "BAR" : "FOOD",
+      catatan: form.catatan.trim() || null,
+    };
+
+    let resepId = form.id;
+    if (resepId) {
+      const { error } = await supabase.from("resep_produksi").update(payload).eq("id", resepId);
+      if (error) { pesan(`Gagal menyimpan: ${error.message}`, "alert"); return false; }
+      const { error: eHapus } = await supabase.from("resep_produksi_bahan").delete().eq("resep_id", resepId);
+      if (eHapus) { pesan(`Gagal memperbarui bahan baku: ${eHapus.message}`, "alert"); return false; }
+    } else {
+      const { data, error } = await supabase.from("resep_produksi").insert(payload).select("id").single();
+      if (error) { pesan(`Gagal menyimpan: ${error.message}`, "alert"); return false; }
+      resepId = data.id;
+    }
+
+    const { error: eBaris } = await supabase.from("resep_produksi_bahan").insert(
+      baris.map((r) => ({ resep_id: resepId, bahan_id: r.bahanId, qty: parseFloat(r.qty) }))
+    );
+    if (eBaris) { pesan(`Resep tersimpan, tapi bahan bakunya gagal: ${eBaris.message}`, "alert"); return false; }
+
+    pesan("Resep produksi tersimpan.");
+    muat();
+  };
+
+  if (list === null) return <Splash tahap="Memuat resep produksi…" />;
+
+  return (
+    <>
+      <Panel judul={`${list.length} resep produksi`}
+        aksi={
+          <div className="ks-inline">
+            <select value={div} onChange={(e) => setDiv(e.target.value)} className="ks-mini-input">
+              <option value="SEMUA">Bar & Kitchen</option><option value="BAR">Bar</option><option value="FOOD">Kitchen</option>
+            </select>
+            <button className="ks-btn kecil utama" onClick={bukaTambah}><Plus size={13} /> Tambah resep</button>
+          </div>
+        }>
+        {list.length === 0 ? (
+          <Kosong teks="Belum ada resep produksi." />
+        ) : (
+          <table className="ks-tabel">
+            <thead><tr><th>Nama</th><th>Bahan hasil</th><th className="r">Hasil/batch</th><th className="r">Umur simpan</th><th className="r">Jumlah bahan</th><th className="r">Biaya/batch</th><th></th></tr></thead>
+            <tbody>
+              {list.map((r) => (
+                <tr key={r.id} className="ks-klik" onClick={() => bukaUbah(r)}>
+                  <td><b>{rapi(r.nama)}</b><div className="ks-sub">{r.divisi === "BAR" ? "Bar" : "Kitchen"}</div></td>
+                  <td>{rapi(r.hasil)}</td>
+                  <td className="r n">{num(r.hasil_qty)} {r.satuan?.toLowerCase()}</td>
+                  <td className="r n">{r.umur_simpan_hari != null ? `${r.umur_simpan_hari} hari` : "—"}</td>
+                  <td className="r n">{r.jumlah_bahan}</td>
+                  <td className="r n">{rp(r.biaya_batch)}</td>
+                  <td onClick={(e) => e.stopPropagation()}><button className="ks-ikon" onClick={() => bukaUbah(r)}><Pencil size={14} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+
+      {sedangMuatForm && <Splash tahap="Memuat resep…" />}
+
+      {form && (
+        <Modal judul={form.id ? `Ubah resep — ${rapi(form.nama)}` : "Tambah resep produksi"} tutup={() => setForm(null)} simpan={simpanForm}>
+          <div className="ks-form">
+            <Field label="Nama resep" lebar>
+              <input value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} placeholder="Mis. Cold Brew batch besar" />
+            </Field>
+
+            <Field label="Bahan hasil" lebar>
+              <select value={form.bahanHasilId} onChange={(e) => setForm({ ...form, bahanHasilId: e.target.value })}>
+                <option value="">— pilih —</option>
+                {db.bahan.map((b) => <option key={b.id} value={b.id}>{rapi(b.n)}</option>)}
+              </select>
+              <div className="ks-sub">
+                Bahan hasilnya belum ada di daftar? <button type="button" className="ks-tautan-kecil" onClick={() => setNav("bahan")}>Buka Master bahan</button> untuk mendaftarkannya dulu.
+              </div>
+            </Field>
+
+            <Field label={`Hasil per batch${bahanHasilTerpilih ? ` (${bahanHasilTerpilih.u.toLowerCase()})` : ""}`}>
+              <input type="number" step="0.01" min="0" value={form.hasilQty} onChange={(e) => setForm({ ...form, hasilQty: e.target.value })} />
+            </Field>
+
+            <Field label="Umur simpan (hari, boleh kosong)">
+              <input type="number" min="0" value={form.umurSimpan} onChange={(e) => setForm({ ...form, umurSimpan: e.target.value })} />
+            </Field>
+
+            <Field label="Catatan cara membuat" lebar>
+              <input value={form.catatan} onChange={(e) => setForm({ ...form, catatan: e.target.value })} placeholder="Mis. rendam 16 jam suhu ruang, saring, dinginkan" />
+            </Field>
+
+            <div style={{ gridColumn: "1/-1", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="ks-sub" style={{ marginTop: 8 }}>Bahan baku per batch</div>
+              {form.baris.map((r, i) => (
+                <div key={i} className="ks-inline">
+                  <select value={r.bahanId} onChange={(e) => ubahBaris(i, "bahanId", e.target.value)} style={{ flex: 1 }}>
+                    <option value="">— pilih bahan —</option>
+                    {db.bahan.map((b) => <option key={b.id} value={b.id}>{rapi(b.n)}</option>)}
+                  </select>
+                  <input type="number" step="0.01" min="0" placeholder="Qty" value={r.qty} onChange={(e) => ubahBaris(i, "qty", e.target.value)} className="ks-mini-input" />
+                  {form.baris.length > 1 && <button className="ks-ikon" onClick={() => hapusBarisForm(i)}><Trash2 size={14} /></button>}
+                </div>
+              ))}
+              <button className="ks-btn kecil" onClick={tambahBaris} style={{ alignSelf: "flex-start" }}><Plus size={13} /> Tambah bahan</button>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 
