@@ -1428,7 +1428,7 @@ export default function App() {
   ].filter((n) => n.id === "dialin"
     ? (["OWNER", "HEAD_BAR", "FINANCE"].includes(peran) || aku.divisi === "BAR")
     : n.id === "produksi"
-    ? (["OWNER", "HEAD_BAR", "HEAD_KITCHEN"].includes(peran) || ["BAR", "FOOD"].includes(aku.divisi))
+    ? (["OWNER", "HEAD_BAR", "HEAD_KITCHEN", "PURCHASING"].includes(peran) || ["BAR", "FOOD"].includes(aku.divisi))
     : bolehLihat(peran, n.id));
   const halaman = NAVS.some((n) => n.id === nav) ? nav : NAVS[0]?.id;
   const P = { db, simpan, pesan, pesanHitung, H, range, setRange, aku, peran, muatUlang, absen, muatAbsen, setNav, lompatMenu, setLompatMenu, pindahPeriode };
