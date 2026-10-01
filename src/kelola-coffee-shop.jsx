@@ -261,8 +261,11 @@ async function muatDb(periode, lapor, tahap) {
       aktif: b.aktif !== false,
       h: parseFloat(b.harga_cadangan) || 0,
       awal: parseFloat(o.awal?.qty) || 0,
-      fisik16: parseFloat(o["16"]?.qty) || 0,
-      fisik: parseFloat(o.akhir?.qty) || 0,
+      // null = belum pernah diisi sama sekali, beda dari 0 yang sungguhan
+      // diisi -- tanpa pembeda ini, bahan berstok 0 tidak pernah bisa
+      // dianggap "sudah dihitung" (lihat finalisasi_opname di migrasi 40).
+      fisik16: o["16"] ? parseFloat(o["16"].qty) : null,
+      fisik: o.akhir ? parseFloat(o.akhir.qty) : null,
       ket: o.akhir?.keterangan || "",
       spoil: 0,
       hari: (belanjaPerBahan[b.id] || []).sort((x, y) => x[0] - y[0]),
@@ -653,16 +656,18 @@ async function tulisBahan(lama, baru, db) {
     // betul-betul membuka sesi itu dan mengisinya. Ini yang dulu membuat
     // baris opname bernilai 0 ikut tercatat untuk sesi "awal"/"16" setiap
     // kali bahan baru dibuat, padahal tidak ada yang mengisinya.
-    const s = sebelumnya || { awal: 0, fisik16: 0, fisik: 0, ket: "" };
+    const s = sebelumnya || { awal: 0, fisik16: null, fisik: null, ket: "" };
     const barisOpname = [];
     if (s.awal !== b.awal) {
       barisOpname.push({ periode: db.aktif, sesi: "awal", bahan_id: b.id, qty: parseFloat(b.awal) || 0 });
     }
-    if (s.fisik16 !== b.fisik16) {
-      barisOpname.push({ periode: db.aktif, sesi: "16", bahan_id: b.id, qty: parseFloat(b.fisik16) || 0 });
+    // fisik16/fisik null berarti "belum diisi" -- jangan kirim baris kalau
+    // masih null, supaya tidak keliru dianggap sudah dihitung bernilai 0.
+    if (s.fisik16 !== b.fisik16 && b.fisik16 != null) {
+      barisOpname.push({ periode: db.aktif, sesi: "16", bahan_id: b.id, qty: b.fisik16 });
     }
-    if (s.fisik !== b.fisik || (s.ket || "") !== (b.ket || "")) {
-      barisOpname.push({ periode: db.aktif, sesi: "akhir", bahan_id: b.id, qty: parseFloat(b.fisik) || 0, keterangan: b.ket || null });
+    if ((s.fisik !== b.fisik || (s.ket || "") !== (b.ket || "")) && b.fisik != null) {
+      barisOpname.push({ periode: db.aktif, sesi: "akhir", bahan_id: b.id, qty: b.fisik, keterangan: b.ket || null });
     }
     if (barisOpname.length) {
       const { error } = await supabase.from("opname").upsert(barisOpname, { onConflict: "periode,sesi,bahan_id" });
@@ -1077,16 +1082,20 @@ function hitung(db, dari = 1, sampai = 31) {
     const seharusnya = b.awal + beliQty[i] - pakaiRange[i] + produksiTambahQty[i] - produksiKurangQty[i];
     const s16 = b.awal + beli16[i] - pakai16[i] + produksiTambah16[i] - produksiKurang16[i];
     const sAkhir = b.awal + beliQtyBulan[i] - pakaiBulan[i] + produksiTambahBulan[i] - produksiKurangBulan[i];
-    const fisik16 = b.fisik16 || 0;
+    // fisik16/fisik null = belum diisi -- dibedakan dari 0 yang sungguhan
+    // (lihat muatDb). Turunan di bawah ini ikut null kalau sumbernya null,
+    // supaya "belum dihitung" tidak pernah keliru tampil seperti "rugi besar".
+    const fisik16 = b.fisik16;
+    const fisik = b.fisik;
     return { ...b, i, h: hEff[i], hTersimpan: b.h, otomatis: otomatis[i], janggal: janggal[i], hHitung: hHitung[i],
       beliQty: beliQty[i], beliRp: beliRp[i], beliQtyBulan: beliQtyBulan[i], beliRpBulan: beliRpBulan[i],
       pakai: pakaiRange[i], pakaiBulan: pakaiBulan[i],
       produksiTambahQty: produksiTambahQty[i], produksiKurangQty: produksiKurangQty[i],
       seharusnya, s16, sAkhir, fisik16,
-      selisih16: fisik16 ? fisik16 - s16 : 0, selisih16Rp: fisik16 ? (fisik16 - s16) * hEff[i] : 0,
-      selisih: b.fisik - sAkhir, selisihRp: (b.fisik - sAkhir) * hEff[i],
-      nilaiAwal: b.awal * hEff[i], nilaiAkhir: b.fisik * hEff[i],
-      persen: sAkhir ? (b.fisik - sAkhir) / Math.abs(sAkhir) : 0 };
+      selisih16: fisik16 != null ? fisik16 - s16 : null, selisih16Rp: fisik16 != null ? (fisik16 - s16) * hEff[i] : null,
+      selisih: fisik != null ? fisik - sAkhir : null, selisihRp: fisik != null ? (fisik - sAkhir) * hEff[i] : null,
+      nilaiAwal: b.awal * hEff[i], nilaiAkhir: fisik != null ? fisik * hEff[i] : null,
+      persen: (fisik != null && sAkhir) ? (fisik - sAkhir) / Math.abs(sAkhir) : null };
   });
 
   const nyata = menu.filter((m) => !m.lacak);
@@ -1422,7 +1431,7 @@ export default function App() {
     ? (["OWNER", "HEAD_BAR", "HEAD_KITCHEN"].includes(peran) || ["BAR", "FOOD"].includes(aku.divisi))
     : bolehLihat(peran, n.id));
   const halaman = NAVS.some((n) => n.id === nav) ? nav : NAVS[0]?.id;
-  const P = { db, simpan, pesan, pesanHitung, H, range, setRange, aku, peran, muatUlang, absen, muatAbsen, setNav, lompatMenu, setLompatMenu };
+  const P = { db, simpan, pesan, pesanHitung, H, range, setRange, aku, peran, muatUlang, absen, muatAbsen, setNav, lompatMenu, setLompatMenu, pindahPeriode };
   const pakaiRentang = ["ringkasan", "sales", "analisis", "belanja", "live", "jadwal"].includes(nav);
 
   return (
@@ -1551,7 +1560,7 @@ function Splash({ tahap }) {
 /* ============================================================
    RINGKASAN
    ============================================================ */
-function Ringkasan({ db, simpan, H, pesan }) {
+function Ringkasan({ db, simpan, H, pesan, setNav, pindahPeriode }) {
   const gap = H.cogsReal - H.cogsResep;
   const bocor = gap * H.omzet;
 
@@ -1606,6 +1615,8 @@ function Ringkasan({ db, simpan, H, pesan }) {
   return (
     <>
       <Head judul="Ringkasan" sub="Dua angka COGS yang harus kamu bandingkan: menurut resep, dan menurut uang yang benar-benar keluar." />
+
+      <BannerStokAwalBelumFinal db={db} setNav={setNav} pindahPeriode={pindahPeriode} />
 
       <div className="ks-baris-aksi kanan">
         <button className="ks-btn kecil" onClick={unduh}><Download size={13} /> Unduh Excel</button>
@@ -2876,10 +2887,46 @@ function BelanjaHal({ db, simpan, H, pesan, pesanHitung }) {
   );
 }
 
+// Dipakai di Live Stock & Ringkasan -- keduanya mengandalkan stok awal
+// periode aktif, yang cuma akurat kalau opname akhir bulan periode SEBELUM
+// ini sudah difinalisasi (lihat migrasi 40 & tombol Finalisasi di SO opname
+// detail). Kalau belum, stok awal yang ditampilkan bisa jadi 0 semua tanpa
+// ada tanda apa pun -- banner ini yang memberi tahu sebelum itu bikin bingung.
+function BannerStokAwalBelumFinal({ db, setNav, pindahPeriode }) {
+  const periodeLalu = periodeSebelum(db.aktif);
+  const [status, setStatus] = useState(null); // null = memuat/belum tentu perlu tampil
+
+  useEffect(() => {
+    let hidup = true;
+    setStatus(null);
+    supabase.rpc("opname_finalisasi_status", { p_periode: periodeLalu }).then(({ data, error }) => {
+      if (!hidup) return;
+      if (error) { console.error("[BannerStokAwal] gagal memuat status finalisasi:", error); setStatus(false); return; }
+      setStatus((data || [])[0] || false);
+    });
+    return () => { hidup = false; };
+  }, [periodeLalu]);
+
+  if (!status || status.sudah_final) return null;
+
+  return (
+    <div className="ks-banner">
+      <AlertTriangle size={16} />
+      <div>
+        <b>Stok awal periode ini mungkin tidak akurat.</b> Opname akhir bulan {namaPeriode(periodeLalu)} belum difinalisasi
+        ({status.sisa} dari {status.total_bahan_aktif} bahan belum dihitung waktu itu).{" "}
+        <button type="button" className="ks-tautan-kecil" onClick={() => { pindahPeriode(periodeLalu); setNav("so"); }}>
+          Buka opname {namaPeriode(periodeLalu)}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ============================================================
    LIVE STOCK
    ============================================================ */
-function LiveStock({ H }) {
+function LiveStock({ H, db, setNav, pindahPeriode }) {
   const [cari, setCari] = useState("");
   const [saring, setSaring] = useState("SEMUA");
   const [div, setDiv] = useState("SEMUA");
@@ -2896,6 +2943,8 @@ function LiveStock({ H }) {
   return (
     <>
       <Head judul="Live stock" sub="Stok awal + belanja − terpakai menu ± produksi. Angka minus berarti pemakaian tercatat melebihi barang yang ada — biasanya resep atau data belanja yang belum akurat." />
+
+      <BannerStokAwalBelumFinal db={db} setNav={setNav} pindahPeriode={pindahPeriode} />
 
       {minus > 0 && (
         <div className="ks-banner">
@@ -3001,6 +3050,32 @@ function SoBalance({ db, simpan, H, peran, pesan, pesanHitung }) {
   const [riwayatOpname, setRiwayatOpname] = useState(null); // { bahanId, nama } | null
   const { urung, nonaktifkan, urungkan } = useNonaktifkanUrung(db, simpan);
 
+  // Status finalisasi opname akhir bulan periode ini -- lihat migrasi 40.
+  // null = sedang dimuat, false = gagal memuat (jangan sampai menghalangi
+  // sisa halaman, cukup disembunyikan).
+  const [statusFinal, setStatusFinal] = useState(null);
+  const [finalisasiSibuk, setFinalisasiSibuk] = useState(false);
+  const bisaFinalisasi = ["OWNER", "FINANCE", "PURCHASING"].includes(peran);
+  const muatStatusFinal = () => {
+    supabase.rpc("opname_finalisasi_status", { p_periode: db.aktif }).then(({ data, error }) => {
+      if (error) { console.error("[SO] gagal memuat status finalisasi:", error); setStatusFinal(false); return; }
+      setStatusFinal((data || [])[0] || false);
+    });
+  };
+  useEffect(muatStatusFinal, [db.aktif]);
+
+  const finalisasi = async () => {
+    if (!statusFinal || !statusFinal.lengkap) return;
+    const label = statusFinal.sudah_final ? "Finalisasi ulang" : "Finalisasi";
+    if (!confirm(`${label} opname akhir bulan ${namaPeriode(db.aktif)}? Hasilnya akan disalin jadi stok awal bulan berikutnya.`)) return;
+    setFinalisasiSibuk(true);
+    const { error } = await supabase.rpc("finalisasi_opname", { p_periode: db.aktif });
+    setFinalisasiSibuk(false);
+    if (error) { pesan(`Gagal finalisasi: ${error.message}`, "alert"); return; }
+    pesan("Opname akhir bulan difinalisasi. Stok awal bulan berikutnya sudah disalin.");
+    muatStatusFinal();
+  };
+
   const t16 = sesi === "16";
   const kolom = t16 ? "fisik16" : "fisik";
   const amb = (b) => t16
@@ -3019,7 +3094,7 @@ function SoBalance({ db, simpan, H, peran, pesan, pesanHitung }) {
       .filter((b) => tampilkanNonaktif || b.aktif !== false);
     if (saring === "RUGI") daftar = daftar.filter((b) => amb(b).rp < -10000);
     if (saring === "LEBIH") daftar = daftar.filter((b) => amb(b).rp > 10000);
-    if (saring === "BELUM") daftar = daftar.filter((b) => !amb(b).fisik);
+    if (saring === "BELUM") daftar = daftar.filter((b) => amb(b).fisik == null);
     daftar = urutkan(daftar, urut, (b) => b.n, (b) => amb(b).rp);
     setUrutanId(daftar.map((b) => b.i));
     // Sengaja tidak menyertakan H/db di sini -- itu yang memang mau dihindari.
@@ -3032,7 +3107,10 @@ function SoBalance({ db, simpan, H, peran, pesan, pesanHitung }) {
   const rows = urutanId.map((i) => petaBahanH.get(i)).filter(Boolean);
 
   const set = (i, k, v) => {
-    simpan({ ...db, bahan: db.bahan.map((b, x) => (x === i ? { ...b, [k]: k === "ket" ? v : parseFloat(v) || 0 } : b)) });
+    // Kolom kosong (v === "") disimpan sebagai null, bukan 0 -- supaya
+    // "belum diisi" tetap beda dari "diisi 0" begitu disimpan ke server.
+    const nilai = k === "ket" ? v : (v === "" ? null : parseFloat(v) || 0);
+    simpan({ ...db, bahan: db.bahan.map((b, x) => (x === i ? { ...b, [k]: nilai } : b)) });
     pesanHitung(t16 ? "so16" : "soakhir", t16 ? "Opname tanggal 16" : "Opname akhir bulan", "bahan");
   };
   const aktifkanKembali = (i) => {
@@ -3044,7 +3122,7 @@ function SoBalance({ db, simpan, H, peran, pesan, pesanHitung }) {
   const semua = H.bahan.filter((b) => b.aktif !== false && (!kunci || (kunci === "BAR") === !!b.bar)).map(amb);
   const rugi = sum(semua.filter((x) => x.rp < 0).map((x) => x.rp));
   const lebih = sum(semua.filter((x) => x.rp > 0).map((x) => x.rp));
-  const terisi = semua.filter((x) => x.fisik).length;
+  const terisi = semua.filter((x) => x.fisik != null).length;
 
   // Ikut kolom, saringan (divisi/status/pencarian/nonaktif), dan urutan yang
   // SEDANG tampil di layar ("rows" -- sudah dikunci lewat urutanId), termasuk
@@ -3056,10 +3134,10 @@ function SoBalance({ db, simpan, H, peran, pesan, pesanHitung }) {
       return [
         rapi(b.n), b.u, b.bar ? "BAR" : "FOOD", b.aktif === false ? "Nonaktif" : "Aktif",
         Math.round(a.seharusnya),
-        a.fisik ? Math.round(a.fisik) : "",
-        a.fisik ? Math.round(a.selisih) : "",
-        a.fisik ? Math.round(a.rp) : "",
-        a.fisik && a.seharusnya ? Math.round((a.selisih / Math.abs(a.seharusnya)) * 1000) / 10 : "",
+        a.fisik != null ? Math.round(a.fisik) : "",
+        a.fisik != null ? Math.round(a.selisih) : "",
+        a.fisik != null ? Math.round(a.rp) : "",
+        a.fisik != null && a.seharusnya ? Math.round((a.selisih / Math.abs(a.seharusnya)) * 1000) / 10 : "",
         db.bahan[b.i].ket || "",
       ];
     });
@@ -3089,8 +3167,35 @@ function SoBalance({ db, simpan, H, peran, pesan, pesanHitung }) {
         <AlertTriangle size={15} />
         <div>{t16
           ? <>Opname tanggal 16 dibandingkan dengan stok seharusnya <b>per tanggal 16</b> — stok awal ditambah belanja sampai tanggal 16, dikurangi pemakaian sampai tanggal 16.</>
-          : <>Hasil opname akhir bulan ini akan menjadi <b>stok awal periode berikutnya</b> begitu kamu berpindah bulan.</>}</div>
+          : <>Hasil opname akhir bulan baru menjadi <b>stok awal periode berikutnya</b> setelah ditekan <b>Finalisasi</b> di bawah — tidak otomatis lagi begitu pindah bulan.</>}</div>
       </div>
+
+      {!t16 && statusFinal && db.aktif < periodeSekarang() && !statusFinal.sudah_final && (
+        <div className="ks-banner">
+          <AlertTriangle size={16} />
+          <div><b>Sudah lewat ke bulan berikutnya, tapi opname akhir bulan {namaPeriode(db.aktif)} belum difinalisasi.</b> Sisa {statusFinal.sisa} dari {statusFinal.total_bahan_aktif} bahan belum dihitung — stok awal bulan berikutnya belum akurat sampai ini dibereskan.</div>
+        </div>
+      )}
+
+      {!t16 && (
+        <div className="ks-banner rapat" style={{ alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+          <div>
+            {!statusFinal ? "Memuat status finalisasi…" : statusFinal.sudah_final
+              ? <>Difinalisasi {statusFinal.difinalisasi_pada ? fmtWaktuWIB(statusFinal.difinalisasi_pada) : ""}{statusFinal.difinalisasi_oleh ? ` oleh ${statusFinal.difinalisasi_oleh}` : ""}.</>
+              : statusFinal.lengkap
+                ? "Semua bahan sudah dihitung, siap difinalisasi."
+                : `Belum bisa difinalisasi — ${statusFinal.sisa} dari ${statusFinal.total_bahan_aktif} bahan belum dihitung.`}
+          </div>
+          {bisaFinalisasi && (
+            <TombolSibuk className="ks-btn" sibuk={finalisasiSibuk} teksSibuk="Menyimpan…"
+              disabled={!statusFinal || !statusFinal.lengkap}
+              title={statusFinal && !statusFinal.lengkap ? `Isi dulu sisa ${statusFinal.sisa} bahan` : undefined}
+              onClick={finalisasi}>
+              {statusFinal && statusFinal.sudah_final ? "Finalisasi ulang" : "Finalisasi opname akhir bulan"}
+            </TombolSibuk>
+          )}
+        </div>
+      )}
 
       <Panel judul={t16 ? "Rincian opname tanggal 16" : "Rincian opname akhir bulan"}
         catatan="Isi kolom hitungan fisik sesuai hasil opname. Selisih dan rupiah terhitung sendiri dari harga rata-rata bulan berjalan."
@@ -3124,10 +3229,10 @@ function SoBalance({ db, simpan, H, peran, pesan, pesanHitung }) {
                   <td>{rapi(b.n)}<div className="ks-sub">{b.u.toLowerCase()} · {b.bar ? "Bar" : "Kitchen"}{nonaktif ? " · nonaktif" : ""}</div></td>
                   <td><span className={"ks-tag " + (b.bar ? "bar" : "kitchen")}>{b.bar ? "BAR" : "FOOD"}</span></td>
                   <td className="r n">{num(a.seharusnya, 0)}</td>
-                  <td className="r"><input type="number" step="any" value={db.bahan[b.i][kolom] || ""} placeholder="0" onChange={(e) => set(b.i, kolom, e.target.value)} /></td>
-                  <td className={"r n " + (a.selisih < 0 ? "minus" : a.selisih > 0 ? "plus" : "")}>{a.fisik ? `${a.selisih > 0 ? "+" : ""}${num(a.selisih, 0)}` : "—"}</td>
-                  <td className={"r n " + (a.rp < 0 ? "minus" : a.rp > 0 ? "plus" : "")}>{a.fisik ? rp(a.rp) : "—"}</td>
-                  <td className="r n ks-sub">{a.fisik && a.seharusnya ? pct(a.selisih / Math.abs(a.seharusnya)) : "—"}</td>
+                  <td className="r"><input type="number" step="any" value={db.bahan[b.i][kolom] ?? ""} placeholder="0" onChange={(e) => set(b.i, kolom, e.target.value)} /></td>
+                  <td className={"r n " + (a.selisih < 0 ? "minus" : a.selisih > 0 ? "plus" : "")}>{a.fisik != null ? `${a.selisih > 0 ? "+" : ""}${num(a.selisih, 0)}` : "—"}</td>
+                  <td className={"r n " + (a.rp < 0 ? "minus" : a.rp > 0 ? "plus" : "")}>{a.fisik != null ? rp(a.rp) : "—"}</td>
+                  <td className="r n ks-sub">{a.fisik != null && a.seharusnya ? pct(a.selisih / Math.abs(a.seharusnya)) : "—"}</td>
                   <td><input value={db.bahan[b.i].ket} placeholder="spoil / salah input / rusak" onChange={(e) => set(b.i, "ket", e.target.value)} /></td>
                   <td className="r ks-aksi-sel">
                     {["OWNER", "FINANCE"].includes(peran) && (
@@ -3416,7 +3521,7 @@ function MasterBahan({ db, simpan, H, pesan, pesanHitung, muatUlang, setNav, set
   const [tambahSibuk, setTambahSibuk] = useState(false);
   const tambah = async () => {
     setTambahSibuk(true);
-    await simpan({ ...db, bahan: [...db.bahan, { id: uid(), n: "BAHAN BARU", u: "GRAM", kat: "Lainnya", bar: 1, hpp: 1, h: 0, konv: 1, awal: 0, fisik: 0, fisik16: 0, hari: [], ket: "", pantau: 0, aktif: true }] });
+    await simpan({ ...db, bahan: [...db.bahan, { id: uid(), n: "BAHAN BARU", u: "GRAM", kat: "Lainnya", bar: 1, hpp: 1, h: 0, konv: 1, awal: 0, fisik: null, fisik16: null, hari: [], ket: "", pantau: 0, aktif: true }] });
     setTambahSibuk(false);
     pesan("Bahan baru ditambahkan.");
   };
@@ -7596,8 +7701,17 @@ function bikinNotif(db, H, aku, peran, absen) {
   if (["HEAD_BAR", "HEAD_KITCHEN", "OWNER"].includes(peran)) {
     const div = divisiPeran(peran);
     const milik = H.bahan.filter((b) => !div || (div === "BAR") === !!b.bar);
-    const belumSO = milik.filter((b) => !b.fisik).length;
-    if (belumSO) n.push({ hal: "so", jenis: "kuning", teks: `${belumSO} bahan belum dihitung di opname akhir bulan`, detail: `dari ${milik.length} bahan` });
+    const belumSO = milik.filter((b) => b.fisik == null).length;
+    // Makin mendesak kalau bulan yang sedang dibuka itu bulan berjalan
+    // sungguhan dan tanggalnya sudah dekat akhir bulan -- supaya pengingat
+    // ini tidak menyala sepanjang bulan sejak hari pertama.
+    const hariTersisa = db.aktif === periodeSekarang() ? H.akhirBulan - new Date().getDate() : null;
+    const mendesak = hariTersisa != null && hariTersisa <= 5;
+    if (belumSO) n.push({ hal: "so", jenis: mendesak ? "merah" : "kuning",
+      teks: mendesak
+        ? `Tinggal ${Math.max(hariTersisa, 0)} hari lagi, ${belumSO} bahan belum dihitung di opname akhir bulan`
+        : `${belumSO} bahan belum dihitung di opname akhir bulan`,
+      detail: `dari ${milik.length} bahan` });
     const timku = db.karyawan.filter((k) => k.role !== "OWNER" && k.status !== "Nonaktif" && (!div || k.divisi === div));
     const tanpaJadwal = timku.filter((k) => !Object.keys(db.jadwal || {}).some((x) => x.startsWith(k.id + "-")));
     if (tanpaJadwal.length) n.push({ hal: "jadwal", jenis: "kuning", teks: `${tanpaJadwal.length} karyawan belum dijadwalkan`, detail: tanpaJadwal.map((k) => k.nama).join(", ") });
