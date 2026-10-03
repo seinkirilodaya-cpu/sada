@@ -10015,11 +10015,36 @@ function DialInHal({ db, pesan, aku, peran }) {
   const bisaAcuan = ["OWNER", "HEAD_BAR"].includes(peran);
   const bisaTerbuang = ["OWNER", "HEAD_BAR", "FINANCE"].includes(peran);
 
-  // Cuma satu biji yang dipakai (Beans Arabica) dan satu grinder -- jadi
-  // tidak ada pilihan biji/grinder di formnya, langsung dipakai yang ini.
+  // Beans bisa dipilih (daftarnya dari daftar_beans()), grinder tetap satu.
+  // "bijiUtama" = beans yang sedang terpilih -- satu sumber kebenaran untuk
+  // form, setelan hari ini, dan acuan. Bawaan awal = beans di catatan dial
+  // in paling terakhir, supaya barista tidak memilih ulang tiap sesi.
   // Black (tanpa susu) dan White (dengan susu) dikalibrasi terpisah lewat
   // kolom sajian, karena keduanya butuh acuan yang berbeda.
-  const bijiUtama = useMemo(() => db.bahan.find((b) => /ARABICA/i.test(b.n || "")) || null, [db.bahan]);
+  const [bijiList, setBijiList] = useState(null); // null = sedang memuat
+  const [bijiId, setBijiId] = useState("");
+  useEffect(() => {
+    let hidup = true;
+    (async () => {
+      const [{ data: daftar, error }, { data: terakhir }] = await Promise.all([
+        supabase.rpc("daftar_beans"),
+        supabase.from("dial_log").select("bahan_id").order("waktu", { ascending: false }).limit(1),
+      ]);
+      if (!hidup) return;
+      if (error) {
+        console.error("[DialIn] gagal memuat daftar beans:", error);
+        pesan(`Gagal memuat daftar beans: ${error.message}`, "alert");
+        setBijiList([]);
+        return;
+      }
+      const list = daftar || [];
+      const idTerakhir = terakhir?.[0]?.bahan_id;
+      setBijiList(list);
+      setBijiId(list.some((b) => b.id === idTerakhir) ? idTerakhir : (list[0]?.id || ""));
+    })();
+    return () => { hidup = false; };
+  }, []);
+  const bijiUtama = useMemo(() => (bijiList || []).find((b) => b.id === bijiId) || null, [bijiList, bijiId]);
 
   const [setelan, setSetelan] = useState(null);
   const muatSetelan = () => {
@@ -10031,15 +10056,22 @@ function DialInHal({ db, pesan, aku, peran }) {
   useEffect(() => { if (penuh) muatSetelan(); }, [penuh]);
 
   // Acuan black dan white untuk biji utama sekaligus, lewat dial_acuan_bahan().
+  // Dimuat ulang tiap beans berganti, dan dikosongkan dulu (null) supaya
+  // acuan beans sebelumnya tidak sempat dipakai membandingkan beans yang baru.
+  // bijiAktifRef menjaga balasan yang telat dari beans sebelumnya diabaikan.
   const [acuanBahan, setAcuanBahan] = useState(null);
+  const bijiAktifRef = useRef("");
+  bijiAktifRef.current = bijiUtama?.id || "";
   const muatAcuanBahan = () => {
-    if (!bijiUtama) { setAcuanBahan([]); return; }
-    supabase.rpc("dial_acuan_bahan", { p_bahan_id: bijiUtama.id }).then(({ data, error }) => {
-      if (error) { console.error("[DialIn] gagal memuat acuan:", error); setAcuanBahan([]); return; }
+    if (!bijiUtama) { setAcuanBahan(bijiList === null ? null : []); return; }
+    const id = bijiUtama.id;
+    supabase.rpc("dial_acuan_bahan", { p_bahan_id: id }).then(({ data, error }) => {
+      if (id !== bijiAktifRef.current) return;
+      if (error) { console.error("[DialIn] gagal memuat acuan:", error); pesan(`Gagal memuat acuan: ${error.message}`, "alert"); setAcuanBahan([]); return; }
       setAcuanBahan(data || []);
     });
   };
-  useEffect(muatAcuanBahan, [bijiUtama?.id]);
+  useEffect(() => { setAcuanBahan(null); muatAcuanBahan(); }, [bijiUtama?.id, bijiList]);
 
   const [grinderList, setGrinderList] = useState(null);
   useEffect(() => {
@@ -10105,7 +10137,8 @@ function DialInHal({ db, pesan, aku, peran }) {
   const gantiSajian = (sajian) => setForm({ ...form, sajian, klikGrinder: grindSizeDefault(sajian), tekstur: sajian === "WHITE" ? form.tekstur : "", ...susuDefault(sajian) });
 
   const simpanDial = async (hasil) => {
-    if (!bijiUtama) { pesan('Belum ada bahan bernama "Beans Arabica" di master bahan.', "alert"); return; }
+    if (!bijiUtama) { pesan("Pilih beans dulu.", "alert"); return; }
+    if (acuanBahan === null) { pesan("Acuan beans ini masih dimuat, coba lagi sebentar.", "alert"); return; }
     if (!(parseFloat(form.dose) > 0) || !(parseFloat(form.yieldGram) > 0) || !(parseFloat(form.waktu) > 0)) {
       pesan("Isi dose, yield, dan waktu dulu.", "alert"); return;
     }
@@ -10144,7 +10177,7 @@ function DialInHal({ db, pesan, aku, peran }) {
     susuBahanId: a.susu_bahan_id || "", susuMl: a.susu_ml != null ? String(a.susu_ml) : "", suhuSusu: a.suhu_susu_c != null ? String(a.suhu_susu_c) : "",
   });
   const simpanAcuan = async () => {
-    if (!bijiUtama) { pesan("Biji utamanya belum ketemu di master bahan.", "alert"); return false; }
+    if (!bijiUtama) { pesan("Pilih beans dulu.", "alert"); return false; }
     if (!(parseFloat(acuanForm.dose) > 0) || !(parseFloat(acuanForm.yieldGram) > 0) || !(parseFloat(acuanForm.waktu) > 0)) {
       pesan("Isi dose, yield, dan waktu.", "alert"); return false;
     }
@@ -10242,10 +10275,16 @@ function DialInHal({ db, pesan, aku, peran }) {
       {penuh && (
         <>
           <div className="ks-baris-aksi kanan">
+            <Field label="Beans">
+              <select value={bijiId} disabled={bijiList === null} onChange={(e) => setBijiId(e.target.value)}>
+                {bijiList === null && <option value="">Memuat…</option>}
+                {(bijiList || []).map((b) => <option key={b.id} value={b.id}>{b.nama}</option>)}
+              </select>
+            </Field>
             <button className="ks-btn utama besar" disabled={!bijiUtama} onClick={() => bukaForm()}><Plus size={16} /> Catat dial in</button>
           </div>
-          {!bijiUtama && (
-            <div className="ks-sub" style={{ marginBottom: 12 }}>Belum ada bahan bernama "Beans Arabica" di master bahan (dicari dari nama yang mengandung "ARABICA"). Beri tahu saya kalau nama bijinya berbeda.</div>
+          {bijiList !== null && bijiList.length === 0 && (
+            <div className="ks-sub" style={{ marginBottom: 12 }}>Daftar beans kosong. Pastikan bahan beans sudah terdaftar di Master bahan dan masuk filter daftar_beans().</div>
           )}
 
           <Panel judul="Setelan hari ini">
@@ -10303,10 +10342,10 @@ function DialInHal({ db, pesan, aku, peran }) {
             <div className="ks-form" style={{ marginBottom: 10 }}>
               <Field label="Dari"><input type="date" value={fDari} onChange={(e) => setFDari(e.target.value)} /></Field>
               <Field label="Sampai"><input type="date" value={fSampai} onChange={(e) => setFSampai(e.target.value)} /></Field>
-              <Field label="Biji">
+              <Field label="Beans">
                 <select value={fBiji} onChange={(e) => setFBiji(e.target.value)}>
                   <option value="">Semua</option>
-                  {bijiUtama && <option value={bijiUtama.id}>{bijiUtama.n}</option>}
+                  {(bijiList || []).map((b) => <option key={b.id} value={b.id}>{b.nama}</option>)}
                 </select>
               </Field>
               <Field label="Sajian">
@@ -10329,9 +10368,9 @@ function DialInHal({ db, pesan, aku, peran }) {
                 <table className="ks-tabel rapat">
                   <thead><tr>
                     {bisaAcuan && <th></th>}
-                    <th>Tanggal</th><th>Sajian</th><th>Grind size</th><th className="r">Dose</th><th className="r">Yield</th><th className="r">Waktu</th><th>Rasa</th><th>Nilai</th><th>Disajikan</th><th>Oleh</th><th>Hasil</th>{bisaAcuan && <th></th>}
+                    <th>Tanggal</th><th>Beans</th><th>Sajian</th><th>Grind size</th><th className="r">Dose</th><th className="r">Yield</th><th className="r">Waktu</th><th>Rasa</th><th>Nilai</th><th>Disajikan</th><th>Oleh</th><th>Hasil</th>{bisaAcuan && <th></th>}
                   </tr></thead>
-                  <tbody>{Array.from({ length: 5 }).map((_, i) => <KerangkaBaris key={i} kolom={bisaAcuan ? 13 : 11} />)}</tbody>
+                  <tbody>{Array.from({ length: 5 }).map((_, i) => <KerangkaBaris key={i} kolom={bisaAcuan ? 14 : 12} />)}</tbody>
                 </table>
               )
               : riwayat.length === 0 ? <Kosong teks="Tidak ada catatan pada rentang ini." />
@@ -10341,13 +10380,14 @@ function DialInHal({ db, pesan, aku, peran }) {
                   <table className="ks-tabel rapat">
                     <thead><tr>
                       {bisaAcuan && <th className="r"><input type="checkbox" checked={semuaTerpilih} onChange={toggleSemua} style={{ width: "auto" }} title="Pilih semua" /></th>}
-                      <th>Tanggal</th><th>Sajian</th><th>Grind size</th><th className="r">Dose</th><th className="r">Yield</th><th className="r">Waktu</th><th>Rasa</th><th>Nilai</th><th>Disajikan</th><th>Oleh</th><th>Hasil</th>{bisaAcuan && <th></th>}
+                      <th>Tanggal</th><th>Beans</th><th>Sajian</th><th>Grind size</th><th className="r">Dose</th><th className="r">Yield</th><th className="r">Waktu</th><th>Rasa</th><th>Nilai</th><th>Disajikan</th><th>Oleh</th><th>Hasil</th>{bisaAcuan && <th></th>}
                     </tr></thead>
                     <tbody>
                       {riwayat.map((r) => (
                         <tr key={r.id}>
                           {bisaAcuan && <td className="r"><input type="checkbox" checked={pilihHapus.has(r.id)} onChange={() => toggleSatu(r.id)} style={{ width: "auto" }} /></td>}
                           <td className="n">{r.tanggal.slice(8)}/{r.tanggal.slice(5, 7)}</td>
+                          <td>{r.bahan || "—"}</td>
                           <td>{r.sajian === "WHITE" ? "White" : "Black"}</td>
                           <td>{r.klik_grinder || "—"}</td>
                           <td className="r n">{num(r.dose_gram, 1)}</td>
@@ -10370,7 +10410,7 @@ function DialInHal({ db, pesan, aku, peran }) {
       )}
 
       {bisaAcuan && (
-        <Panel judul="Acuan" catatan="Target resep yang disepakati -- jadi patokan saat dial in. Black dan White dikalibrasi terpisah."
+        <Panel judul={bijiUtama ? `Acuan · ${bijiUtama.nama}` : "Acuan"} catatan="Target resep yang disepakati -- jadi patokan saat dial in. Tiap beans punya acuan sendiri (ganti pilihan Beans di atas untuk melihat/mengubah acuan beans lain); Black dan White dikalibrasi terpisah."
           aksi={
             <div className="ks-dial-pilihan">
               {bijiUtama && ["BLACK", "WHITE"].filter((s) => !acuanPerSajian.has(s)).map((s) => (
@@ -10463,6 +10503,11 @@ function DialInHal({ db, pesan, aku, peran }) {
             <div className="ks-modal-atas"><h3>Catat dial in</h3><button className="ks-ikon" onClick={() => setForm(null)}><X size={16} /></button></div>
             <div className="ks-modal-isi">
               <div className="ks-form">
+                <Field label="Beans" lebar>
+                  <select value={bijiId} onChange={(e) => { setBijiId(e.target.value); setForm({ ...form, klikGrinder: "" }); }}>
+                    {(bijiList || []).map((b) => <option key={b.id} value={b.id}>{b.nama}</option>)}
+                  </select>
+                </Field>
                 <Field label="Sajian" lebar>
                   <div className="ks-dial-pilihan">
                     <button type="button" className={"ks-btn" + (form.sajian === "BLACK" ? " utama" : "")} onClick={() => gantiSajian("BLACK")}>Black</button>
