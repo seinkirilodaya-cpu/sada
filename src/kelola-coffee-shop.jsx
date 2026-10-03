@@ -6,7 +6,7 @@ import {
   Search, Pencil, ChevronRight, CalendarDays, GraduationCap, ClipboardList, Moon, HeartHandshake, Bell,
   PackagePlus as PackagePlus2, FileBarChart, Wallet, Receipt, Menu, ChevronDown, Download, Upload,
   Eye, EyeOff, ArrowLeft, RefreshCw, CalendarOff, Printer, TrendingDown, MoreVertical,
-  Coffee, Star, Grid2x2, History, TrendingUp, Truck, FlaskConical,
+  Coffee, Star, Grid2x2, History, TrendingUp, Truck, FlaskConical, Camera, MapPin,
 } from "lucide-react";
 import { supabase, supabaseSiap } from "./supabase.js";
 
@@ -1255,6 +1255,18 @@ export default function App() {
   };
   useEffect(() => { if (akuDb) muatAbsen(); }, [akuDb]);
 
+  // Anomali absen kehadiran yang belum ditinjau (khusus Owner) -- bahan Lonceng.
+  // Gagal memuat cukup dicatat ke console: fungsinya baru ada setelah migrasi
+  // 42-absen-kehadiran.sql dijalankan, dan Lonceng tidak boleh ikut error.
+  const [anomaliAbsen, setAnomaliAbsen] = useState(null);
+  const muatAnomaliAbsen = async () => {
+    if (akuDb?.role !== "OWNER") return;
+    const { data, error } = await supabase.rpc("absen_anomali_menunggu");
+    if (error) { console.error("[muatAnomaliAbsen] gagal:", error); return; }
+    setAnomaliAbsen(data);
+  };
+  useEffect(() => { if (akuDb) muatAnomaliAbsen(); }, [akuDb]);
+
   const simpan = async (next) => {
     const lama = db;
     setDb(next); // langsung tampil (optimistic) — ditulis ke Supabase di belakang layar
@@ -1416,6 +1428,7 @@ export default function App() {
     { id: "bahan", label: "Master bahan", icon: Layers },
     { id: "jadwal", label: "Jadwal shift", icon: CalendarDays },
     { id: "absen", label: "Cuti & izin", icon: CalendarOff },
+    { id: "kehadiran", label: "Absen", icon: Camera },
     { id: "request", label: "Request belanja", icon: ClipboardList },
     { id: "kuis", label: "Kuis & asesmen", icon: GraduationCap },
     { id: "peer", label: "Peer review", icon: HeartHandshake },
@@ -1431,7 +1444,7 @@ export default function App() {
     ? (["OWNER", "HEAD_BAR", "HEAD_KITCHEN", "PURCHASING"].includes(peran) || ["BAR", "FOOD"].includes(aku.divisi))
     : bolehLihat(peran, n.id));
   const halaman = NAVS.some((n) => n.id === nav) ? nav : NAVS[0]?.id;
-  const P = { db, simpan, pesan, pesanHitung, H, range, setRange, aku, peran, muatUlang, absen, muatAbsen, setNav, lompatMenu, setLompatMenu, pindahPeriode };
+  const P = { db, simpan, pesan, pesanHitung, H, range, setRange, aku, peran, muatUlang, absen, muatAbsen, setNav, lompatMenu, setLompatMenu, pindahPeriode, muatAnomaliAbsen };
   const pakaiRentang = ["ringkasan", "sales", "analisis", "belanja", "live", "jadwal"].includes(nav);
 
   return (
@@ -1484,7 +1497,7 @@ export default function App() {
             <RefreshCw size={14} /> Muat ulang
           </TombolSibuk>
           <PenandaTipis aktif={muatUlangSibuk} />
-          <Lonceng db={db} H={H} aku={aku} peran={peran} pergi={setNav} absen={absen} />
+          <Lonceng db={db} H={H} aku={aku} peran={peran} pergi={setNav} absen={absen} anomaliAbsen={anomaliAbsen} />
           <button className="ks-btn" onClick={() => supabase.auth.signOut()}>Keluar</button>
         </div>
         {pakaiRentang && <Rentang range={range} setRange={setRange} db={db} />}
@@ -1503,6 +1516,7 @@ export default function App() {
         {halaman === "bahan" && <MasterBahan {...P} />}
         {halaman === "jadwal" && <Jadwal {...P} />}
         {halaman === "absen" && <CutiIzin {...P} />}
+        {halaman === "kehadiran" && <AbsenHal {...P} />}
         {halaman === "harian" && <OpnameHarian {...P} />}
         {halaman === "dialin" && <DialInHal {...P} />}
         {halaman === "peer" && <PeerReview {...P} />}
@@ -5611,13 +5625,13 @@ const PERAN = {
 };
 
 const AKSES = {
-  OWNER: ["laporan", "ringkasan", "sales", "analisis", "harga", "kinerja", "belanja", "live", "so", "harian", "resep", "bahan", "jadwal", "absen", "request", "kuis", "peer", "gaji", "karyawan", "impor", "ekspor", "pengeluaran", "jejak"],
-  FINANCE: ["laporan", "ringkasan", "sales", "analisis", "harga", "kinerja", "impor", "belanja", "live", "so", "bahan", "gaji", "slip", "kuis", "peer", "absen", "pengeluaran", "jejak"],
-  HEAD_BAR: ["live", "so", "harian", "resep", "jadwal", "absen", "request", "kuis", "peer", "slip", "kinerja"],
-  HEAD_KITCHEN: ["live", "so", "harian", "resep", "jadwal", "absen", "request", "kuis", "peer", "slip", "kinerja"],
-  PURCHASING: ["live", "belanja", "so", "harian", "bahan", "harga", "kinerja", "jadwal", "absen", "request", "kuis", "peer", "slip", "pengeluaran"],
-  MARKETING: ["ringkasan", "sales", "analisis", "impor", "jadwal", "absen", "request", "kuis", "peer", "slip"],
-  STAFF: ["jadwal", "absen", "harian", "request", "kuis", "peer", "slip"],
+  OWNER: ["laporan", "ringkasan", "sales", "analisis", "harga", "kinerja", "belanja", "live", "so", "harian", "resep", "bahan", "jadwal", "absen", "kehadiran", "request", "kuis", "peer", "gaji", "karyawan", "impor", "ekspor", "pengeluaran", "jejak"],
+  FINANCE: ["laporan", "ringkasan", "sales", "analisis", "harga", "kinerja", "impor", "belanja", "live", "so", "bahan", "gaji", "slip", "kuis", "peer", "absen", "kehadiran", "pengeluaran", "jejak"],
+  HEAD_BAR: ["live", "so", "harian", "resep", "jadwal", "absen", "kehadiran", "request", "kuis", "peer", "slip", "kinerja"],
+  HEAD_KITCHEN: ["live", "so", "harian", "resep", "jadwal", "absen", "kehadiran", "request", "kuis", "peer", "slip", "kinerja"],
+  PURCHASING: ["live", "belanja", "so", "harian", "bahan", "harga", "kinerja", "jadwal", "absen", "kehadiran", "request", "kuis", "peer", "slip", "pengeluaran"],
+  MARKETING: ["ringkasan", "sales", "analisis", "impor", "jadwal", "absen", "kehadiran", "request", "kuis", "peer", "slip"],
+  STAFF: ["jadwal", "absen", "kehadiran", "harian", "request", "kuis", "peer", "slip"],
 };
 
 const bolehLihat = (peran, hal) => (AKSES[peran] || AKSES.STAFF).includes(hal);
@@ -5631,7 +5645,7 @@ const GRUP_NAV = [
   { judul: "RINGKASAN", ids: ["ringkasan", "laporan", "analisis", "harga", "kinerja"] },
   { judul: "PENJUALAN", ids: ["sales", "impor", "resep", "dialin"] },
   { judul: "STOK & BELANJA", ids: ["request", "belanja", "live", "produksi", "harian", "so", "bahan", "pengeluaran"] },
-  { judul: "ORANG", ids: ["jadwal", "absen", "gaji", "slip", "kuis", "peer", "karyawan"] },
+  { judul: "ORANG", ids: ["jadwal", "absen", "kehadiran", "gaji", "slip", "kuis", "peer", "karyawan"] },
   { judul: "SISTEM", ids: ["ekspor", "jejak"] },
 ];
 // Peran dengan menu sebanyak ini atau kurang tetap tampil datar (tidak
@@ -7666,7 +7680,7 @@ function CariBahan({ db, H, nilai, set, placeholder = "Ketik nama bahan", hanyaD
 /* ============================================================
    NOTIFIKASI — disesuaikan dengan peran
    ============================================================ */
-function bikinNotif(db, H, aku, peran, absen) {
+function bikinNotif(db, H, aku, peran, absen, anomaliAbsen) {
   const n = [];
   const hariIni = new Date().toISOString().slice(0, 10);
   const req = db.request || [];
@@ -7718,6 +7732,11 @@ function bikinNotif(db, H, aku, peran, absen) {
   }
 
   if (peran === "OWNER") {
+    // Foto absen dihapus di hari ke-7 -- di hari ke-5 anomali yang belum ditinjau
+    // mulai diingatkan, supaya fotonya masih sempat dilihat (lihat migrasi 42).
+    if (anomaliAbsen?.mendesak > 0) n.push({ hal: "kehadiran", jenis: "merah",
+      teks: `${anomaliAbsen.mendesak} anomali absen belum ditinjau, fotonya segera terhapus`,
+      detail: "Foto dihapus otomatis di hari ke-7. Tinjau sekarang di halaman Absen." });
     const lewat = db.karyawan.filter((k) => k.status !== "Nonaktif" && (k.akhir || k.kontrakAkhir) && new Date(k.akhir || k.kontrakAkhir) < new Date());
     if (lewat.length) n.push({ hal: "karyawan", jenis: "merah", teks: `${lewat.length} kontrak sudah lewat tanggal`, detail: lewat.map((k) => k.nama).join(", ") });
     const dekat = db.karyawan.filter((k) => {
@@ -7747,9 +7766,9 @@ function bikinNotif(db, H, aku, peran, absen) {
   return n;
 }
 
-function Lonceng({ db, H, aku, peran, pergi, absen }) {
+function Lonceng({ db, H, aku, peran, pergi, absen, anomaliAbsen }) {
   const [buka, setBuka] = useState(false);
-  const notif = bikinNotif(db, H, aku, peran, absen);
+  const notif = bikinNotif(db, H, aku, peran, absen, anomaliAbsen);
   const merah = notif.filter((x) => x.jenis === "merah").length;
 
   return (
@@ -10004,6 +10023,796 @@ function ProduksiResepTab({ db, pesan, setNav }) {
   );
 }
 
+/* ============================================================
+   ABSEN KEHADIRAN — selfie + lokasi (lihat migrasi/42-absen-kehadiran.sql)
+   Beda dengan "Cuti & izin" (tabel pengajuan_absen): ini catatan hadir
+   sungguhan. Karyawan menulis HANYA lewat catat_absen() -- waktu, jarak,
+   status, dan anomali dihitung server, bukan dari angka kiriman HP.
+   ============================================================ */
+const VERSI_PRIVASI_ABSEN = "v1";
+const BUCKET_FOTO_ABSEN = "absen-foto";
+const LABEL_ANOMALI_ABSEN = {
+  di_luar_radius: "Di luar radius outlet",
+  akurasi_gps_buruk: "Akurasi GPS buruk",
+  device_dipakai_banyak_orang: "HP dipakai banyak orang",
+  ip_berbeda_dari_biasanya: "Jaringan tidak biasa",
+  waktu_jauh_dari_shift: "Jauh dari jam shift",
+  tanpa_jadwal: "Tanpa jadwal",
+  tidak_ada_absen_pulang: "Tidak ada absen pulang",
+  tanpa_absen_masuk: "Pulang tanpa absen masuk",
+};
+const LABEL_STATUS_ABSEN = { tepat_waktu: "Tepat waktu", terlambat: "Terlambat", pulang_cepat: "Pulang cepat", tanpa_jadwal: "Tanpa jadwal" };
+const KELAS_STATUS_ABSEN = { tepat_waktu: "dibeli", terlambat: "ditolak", pulang_cepat: "baru", tanpa_jadwal: "disetujui" };
+
+const ymdWIB = (d = new Date()) => new Date(d.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+const jamWIB = (iso) => (iso ? new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Jakarta" }) : "—");
+const tglPendek = (ymd) => `${String(ymd).slice(8, 10)}/${String(ymd).slice(5, 7)}`;
+const selisihHariYmd = (a, b) => Math.round((Date.UTC(+a.slice(0, 4), +a.slice(5, 7) - 1, +a.slice(8, 10)) - Date.UTC(+b.slice(0, 4), +b.slice(5, 7) - 1, +b.slice(8, 10))) / 86400000);
+const teksSelisihAbsen = (m) => (m == null ? "" : `${m > 0 ? "+" : ""}${m} mnt`);
+
+function deviceIdAbsen() {
+  try {
+    let id = localStorage.getItem("sada_device_id");
+    if (!id) { id = crypto.randomUUID(); localStorage.setItem("sada_device_id", id); }
+    return id;
+  } catch { return null; }
+}
+
+const ambilLokasiAbsen = () => new Promise((resolve, reject) => {
+  if (!navigator.geolocation) { reject(new Error("Peramban ini tidak mendukung lokasi.")); return; }
+  navigator.geolocation.getCurrentPosition(
+    (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, akurasi: p.coords.accuracy }),
+    reject,
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
+  );
+});
+const pesanGalatLokasi = (e) => (
+  e?.code === 1 ? "Izin lokasi ditolak. Buka pengaturan peramban atau HP, izinkan Lokasi untuk situs ini, lalu muat ulang halaman."
+  : e?.code === 2 ? "Lokasi tidak tersedia. Nyalakan GPS/Lokasi di HP lalu coba lagi."
+  : e?.code === 3 ? "Mencari lokasi terlalu lama. Pindah ke tempat terbuka lalu coba lagi."
+  : (e?.message || "Gagal mengambil lokasi.")
+);
+
+// Kecilkan ke lebar maksimal 720px dan jadikan JPEG -- cukup untuk bukti, hemat kuota.
+const jadikanJpeg = (sumber, lebarAsli, tinggiAsli) => new Promise((resolve, reject) => {
+  const skala = Math.min(1, 720 / lebarAsli);
+  const c = document.createElement("canvas");
+  c.width = Math.round(lebarAsli * skala);
+  c.height = Math.round(tinggiAsli * skala);
+  c.getContext("2d").drawImage(sumber, 0, 0, c.width, c.height);
+  c.toBlob((b) => (b ? resolve(b) : reject(new Error("Foto kosong"))), "image/jpeg", 0.75);
+});
+
+function ChipAnomali({ kode }) {
+  return <span className="ks-chip-anomali">{LABEL_ANOMALI_ABSEN[kode] || kode}</span>;
+}
+
+function AbsenHal(props) {
+  return props.peran === "OWNER" ? <AbsenOwner {...props} /> : <AbsenKaryawan {...props} />;
+}
+
+/* ---------- Tampilan karyawan (mobile-first) ---------- */
+function AbsenKaryawan({ aku, pesan }) {
+  const [status, setStatus] = useState(null); // null = memuat, false = gagal
+  const [riwayat, setRiwayat] = useState(null);
+  const [koreksi, setKoreksi] = useState(null);
+  const [minta, setMinta] = useState(null); // jenis yang menunggu persetujuan privasi
+  const [formAbsen, setFormAbsen] = useState(null); // 'masuk' | 'pulang'
+  const [formKoreksi, setFormKoreksi] = useState(null);
+  const [sibukSetuju, setSibukSetuju] = useState(false);
+
+  const muatStatus = () => {
+    supabase.rpc("status_absen_hari_ini").then(({ data, error }) => {
+      if (error) { console.error("[Absen] gagal memuat status:", error); pesan(`Gagal memuat status absen: ${error.message}`, "alert"); setStatus(false); return; }
+      setStatus(data || false);
+    });
+  };
+  const muatRiwayat = () => {
+    supabase.from("absen").select("id,tanggal,jenis,waktu,status,selisih_menit,anomali,hasil_koreksi,dinas_luar")
+      .eq("karyawan_id", aku.id).order("tanggal", { ascending: false }).order("waktu", { ascending: false }).limit(60)
+      .then(({ data, error }) => {
+        if (error) { console.error("[Absen] gagal memuat riwayat:", error); pesan(`Gagal memuat riwayat absen: ${error.message}`, "alert"); setRiwayat([]); return; }
+        setRiwayat(data || []);
+      });
+  };
+  const muatKoreksi = () => {
+    supabase.from("absen_koreksi").select("*").eq("karyawan_id", aku.id).order("dibuat", { ascending: false }).limit(20)
+      .then(({ data, error }) => {
+        if (error) { console.error("[Absen] gagal memuat koreksi:", error); setKoreksi([]); return; }
+        setKoreksi(data || []);
+      });
+  };
+  const muatSemua = () => { muatStatus(); muatRiwayat(); muatKoreksi(); };
+  useEffect(() => { muatSemua(); }, [aku.id]);
+
+  const mulai = (jenis) => {
+    if (!status || status.setuju) { setFormAbsen(jenis); return; }
+    setMinta(jenis);
+  };
+  const setujui = async () => {
+    setSibukSetuju(true);
+    const { error } = await supabase.rpc("setujui_absen_privasi", { p_versi: VERSI_PRIVASI_ABSEN, p_user_agent: navigator.userAgent });
+    setSibukSetuju(false);
+    if (error) { pesan(`Gagal menyimpan persetujuan: ${error.message}`, "alert"); return; }
+    const jenis = minta;
+    setMinta(null);
+    setStatus((s) => ({ ...s, setuju: true }));
+    setFormAbsen(jenis);
+  };
+
+  const bukaKoreksi = () => setFormKoreksi({ tanggal: ymdWIB(), jenis: "masuk", jam: "", alasan: "" });
+  const ajukanKoreksi = async () => {
+    if (!formKoreksi.jam) { pesan("Isi jam yang benar.", "alert"); return false; }
+    if (!formKoreksi.alasan.trim()) { pesan("Isi alasannya.", "alert"); return false; }
+    const { error } = await supabase.rpc("ajukan_koreksi_absen", {
+      p_tanggal: formKoreksi.tanggal, p_jenis: formKoreksi.jenis, p_jam: formKoreksi.jam, p_alasan: formKoreksi.alasan,
+    });
+    if (error) { pesan(`Gagal mengajukan koreksi: ${error.message}`, "alert"); return false; }
+    pesan("Pengajuan koreksi terkirim.");
+    muatKoreksi();
+  };
+
+  const selesaiAbsen = (hasil) => {
+    setFormAbsen(null);
+    pesan(`Absen ${hasil.jenis} tercatat ${jamWIB(hasil.waktu)} · ${LABEL_STATUS_ABSEN[hasil.status] || hasil.status}.`);
+    muatSemua();
+  };
+
+  const baris = (label, a) => (
+    <div className="ks-absen-baris">
+      <span>{label}</span>
+      {a ? (
+        <span><b className="n">{jamWIB(a.waktu)}</b>{" "}
+          <span className={"ks-status " + (KELAS_STATUS_ABSEN[a.status] || "")}>{LABEL_STATUS_ABSEN[a.status] || a.status}</span>
+          {a.selisih_menit != null && <span className="ks-sub"> {teksSelisihAbsen(a.selisih_menit)}</span>}
+        </span>
+      ) : <span className="ks-sub">Belum</span>}
+    </div>
+  );
+
+  const tombol = status && (!status.masuk ? { jenis: "masuk", teks: "Absen masuk" } : !status.pulang ? { jenis: "pulang", teks: "Absen pulang" } : null);
+
+  return (
+    <div>
+      <Head judul="Absen" sub="Absen masuk dan pulang dengan foto selfie dan lokasi. Foto dihapus otomatis setelah 7 hari." />
+
+      <Panel judul="Hari ini" catatan={status ? new Date(status.tanggal + "T00:00:00").toLocaleDateString("id-ID", { weekday: "long", day: "numeric", month: "long" }) : undefined}>
+        {status === null ? <KerangkaKartu /> : status === false ? (
+          <Kosong teks="Status absen belum bisa dimuat. Muat ulang halaman, atau hubungi Owner kalau berulang." />
+        ) : (
+          <>
+            <div className="ks-sub" style={{ marginBottom: 10 }}>
+              {status.kode_shift && status.jam_shift
+                ? <>Shift hari ini: <b>{SHIFT_AWAL[status.kode_shift]?.nama || status.kode_shift}</b> · {status.jam_shift}</>
+                : "Tidak ada jadwal kerja hari ini. Absen tetap tersimpan dan ditandai tanpa jadwal."}
+            </div>
+            {baris("Masuk", status.masuk)}
+            {baris("Pulang", status.pulang)}
+            <button className="ks-btn utama besar ks-absen-besar" disabled={!tombol} onClick={() => tombol && mulai(tombol.jenis)}>
+              <Camera size={20} /> {tombol ? tombol.teks : "Absen hari ini selesai"}
+            </button>
+          </>
+        )}
+      </Panel>
+
+      <Panel judul="Riwayat absen"
+        aksi={<button className="ks-btn kecil" onClick={bukaKoreksi}>Ajukan koreksi</button>}
+        catatan="Lupa absen atau jamnya salah? Ajukan koreksi, Owner yang memutuskan.">
+        {riwayat === null ? (
+          <table className="ks-tabel rapat"><tbody>{Array.from({ length: 4 }).map((_, i) => <KerangkaBaris key={i} kolom={4} />)}</tbody></table>
+        ) : riwayat.length === 0 ? <Kosong teks="Belum ada catatan absen." /> : (
+          <table className="ks-tabel rapat">
+            <thead><tr><th>Tanggal</th><th>Jenis</th><th>Jam</th><th>Status</th></tr></thead>
+            <tbody>
+              {riwayat.map((r) => (
+                <tr key={r.id}>
+                  <td className="n">{tglPendek(r.tanggal)}</td>
+                  <td>{r.jenis === "masuk" ? "Masuk" : "Pulang"}</td>
+                  <td className="n">{jamWIB(r.waktu)}</td>
+                  <td>
+                    <span className={"ks-status " + (KELAS_STATUS_ABSEN[r.status] || "")}>{LABEL_STATUS_ABSEN[r.status] || r.status}</span>
+                    {r.selisih_menit != null && <span className="ks-sub"> {teksSelisihAbsen(r.selisih_menit)}</span>}
+                    {r.hasil_koreksi && <span className="ks-sub"> · koreksi</span>}
+                    {r.dinas_luar && <span className="ks-sub"> · dinas luar</span>}
+                    {(r.anomali || []).length > 0 && <div>{r.anomali.map((k) => <ChipAnomali key={k} kode={k} />)}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+
+      {koreksi && koreksi.length > 0 && (
+        <Panel judul="Pengajuan koreksi">
+          <table className="ks-tabel rapat">
+            <thead><tr><th>Tanggal</th><th>Jenis</th><th>Jam</th><th>Status</th></tr></thead>
+            <tbody>
+              {koreksi.map((k) => (
+                <tr key={k.id}>
+                  <td className="n">{tglPendek(k.tanggal)}</td>
+                  <td>{k.jenis === "masuk" ? "Masuk" : "Pulang"}</td>
+                  <td className="n">{String(k.jam_diajukan).slice(0, 5)}</td>
+                  <td>
+                    <span className={"ks-status " + (k.status === "disetujui" ? "dibeli" : k.status === "ditolak" ? "ditolak" : "baru")}>{k.status}</span>
+                    {k.balasan && <div className="ks-sub">{k.balasan}</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+
+      {minta && (
+        <div className="ks-modal-bg" onClick={() => setMinta(null)}>
+          <div className="ks-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ks-modal-atas"><h3>Sebelum absen pertama</h3><button className="ks-ikon" onClick={() => setMinta(null)}><X size={16} /></button></div>
+            <div className="ks-modal-isi">
+              <p>Foto selfie dan lokasi GPS-mu dipakai untuk mencatat absensi.</p>
+              <ul className="ks-absen-daftar">
+                <li>Foto dihapus otomatis setelah 7 hari.</li>
+                <li>Data absen (waktu, lokasi, status) tetap disimpan.</li>
+                <li>Hanya Owner yang bisa melihat fotonya.</li>
+              </ul>
+            </div>
+            <div className="ks-modal-bawah">
+              <button className="ks-btn" onClick={() => setMinta(null)} disabled={sibukSetuju}>Batal</button>
+              <TombolSibuk className="ks-btn utama" sibuk={sibukSetuju} teksSibuk="Menyimpan…" onClick={setujui}>Setuju dan lanjut</TombolSibuk>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {formAbsen && <FormAbsen jenis={formAbsen} aku={aku} pesan={pesan} tutup={() => setFormAbsen(null)} selesai={selesaiAbsen} />}
+
+      {formKoreksi && (
+        <Modal judul="Ajukan koreksi absen" tutup={() => setFormKoreksi(null)} simpan={ajukanKoreksi}>
+          <div className="ks-form">
+            <Field label="Tanggal"><input type="date" max={ymdWIB()} value={formKoreksi.tanggal} onChange={(e) => setFormKoreksi({ ...formKoreksi, tanggal: e.target.value })} /></Field>
+            <Field label="Jenis">
+              <select value={formKoreksi.jenis} onChange={(e) => setFormKoreksi({ ...formKoreksi, jenis: e.target.value })}>
+                <option value="masuk">Masuk</option><option value="pulang">Pulang</option>
+              </select>
+            </Field>
+            <Field label="Jam yang benar"><input type="time" value={formKoreksi.jam} onChange={(e) => setFormKoreksi({ ...formKoreksi, jam: e.target.value })} /></Field>
+            <Field label="Alasan" lebar><textarea rows={3} value={formKoreksi.alasan} onChange={(e) => setFormKoreksi({ ...formKoreksi, alasan: e.target.value })} placeholder="mis. lupa absen karena ramai" /></Field>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/* Alur absen: lokasi -> kamera -> konfirmasi -> kirim. Foto diambil langsung
+   dari kamera (tanpa galeri); kalau getUserMedia gagal, jatuh ke input
+   capture="user". Foto diunggah dulu ke bucket privat, baru catat_absen(). */
+function FormAbsen({ jenis, aku, pesan, tutup, selesai }) {
+  const [tahap, setTahap] = useState("lokasi"); // lokasi | kamera | konfirmasi
+  const [lokasi, setLokasi] = useState(null);
+  const [galatLokasi, setGalatLokasi] = useState("");
+  const [galatKamera, setGalatKamera] = useState("");
+  const [pakaiInput, setPakaiInput] = useState(false);
+  const [foto, setFoto] = useState(null); // { blob, url }
+  const [dinas, setDinas] = useState(false);
+  const [ketDinas, setKetDinas] = useState("");
+  const [galat, setGalat] = useState("");
+  const [sibuk, setSibuk] = useState(false);
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+
+  const hentikanKamera = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  };
+  useEffect(() => () => hentikanKamera(), []);
+  useEffect(() => () => { if (foto?.url) URL.revokeObjectURL(foto.url); }, [foto]);
+
+  const cariLokasi = async () => {
+    setGalatLokasi(""); setLokasi(null); setTahap("lokasi");
+    try {
+      setLokasi(await ambilLokasiAbsen());
+    } catch (e) {
+      setGalatLokasi(pesanGalatLokasi(e));
+    }
+  };
+  useEffect(() => { cariLokasi(); }, []);
+  useEffect(() => { if (lokasi && tahap === "lokasi") setTahap("kamera"); }, [lokasi, tahap]);
+
+  const bukaKamera = async () => {
+    setGalatKamera(""); setPakaiInput(false);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPakaiInput(true);
+      setGalatKamera("Kamera langsung tidak tersedia di peramban ini. Pakai tombol di bawah untuk memotret.");
+      return;
+    }
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 960 }, height: { ideal: 1280 } }, audio: false });
+      streamRef.current = s;
+      if (videoRef.current) { videoRef.current.srcObject = s; await videoRef.current.play().catch(() => {}); }
+    } catch (e) {
+      setPakaiInput(true);
+      setGalatKamera(e?.name === "NotAllowedError"
+        ? "Izin kamera ditolak. Buka pengaturan peramban atau HP, izinkan Kamera untuk situs ini, lalu coba lagi. Sementara bisa pakai tombol di bawah."
+        : "Kamera tidak bisa dibuka. Pakai tombol di bawah untuk memotret.");
+    }
+  };
+  useEffect(() => {
+    if (tahap !== "kamera") return undefined;
+    bukaKamera();
+    return () => hentikanKamera();
+  }, [tahap]);
+
+  const ambilFoto = async () => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) { pesan("Kamera belum siap, tunggu sebentar.", "alert"); return; }
+    try {
+      const blob = await jadikanJpeg(v, v.videoWidth, v.videoHeight);
+      hentikanKamera();
+      setFoto({ blob, url: URL.createObjectURL(blob) });
+      setTahap("konfirmasi");
+    } catch { pesan("Gagal mengambil foto, coba lagi.", "alert"); }
+  };
+  const fotoDariInput = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      let bmp;
+      try { bmp = await createImageBitmap(file, { imageOrientation: "from-image" }); } catch { bmp = await createImageBitmap(file); }
+      const blob = await jadikanJpeg(bmp, bmp.width, bmp.height);
+      hentikanKamera();
+      setFoto({ blob, url: URL.createObjectURL(blob) });
+      setTahap("konfirmasi");
+    } catch { pesan("Foto tidak bisa dibaca, coba lagi.", "alert"); }
+  };
+
+  const kirim = async () => {
+    setGalat("");
+    if (dinas && !ketDinas.trim()) { setGalat("Isi keterangan dinas luar dulu."); return; }
+    setSibuk(true);
+    const path = `${aku.id}/${ymdWIB()}/${jenis}-${Date.now()}.jpg`;
+    const { error: eUnggah } = await supabase.storage.from(BUCKET_FOTO_ABSEN).upload(path, foto.blob, { contentType: "image/jpeg", upsert: false });
+    if (eUnggah) { setSibuk(false); setGalat(`Foto gagal diunggah: ${eUnggah.message}`); return; }
+    const { data, error } = await supabase.rpc("catat_absen", {
+      p_jenis: jenis, p_lat: lokasi.lat, p_lng: lokasi.lng, p_akurasi: lokasi.akurasi,
+      p_foto_path: path, p_dinas_luar: dinas, p_keterangan_dinas: dinas ? ketDinas.trim() : null,
+      p_device_id: deviceIdAbsen(), p_user_agent: navigator.userAgent,
+    });
+    setSibuk(false);
+    if (error) { setGalat(`Absen gagal disimpan: ${error.message}`); return; }
+    selesai(data);
+  };
+
+  const batal = () => { hentikanKamera(); tutup(); };
+
+  return (
+    <div className="ks-modal-bg">
+      <div className="ks-modal">
+        <div className="ks-modal-atas"><h3>Absen {jenis}</h3><button className="ks-ikon" onClick={batal} disabled={sibuk}><X size={16} /></button></div>
+        <div className="ks-modal-isi">
+          {tahap === "lokasi" && (
+            galatLokasi ? (
+              <>
+                <div className="ks-banner"><AlertTriangle size={16} /><div>{galatLokasi}</div></div>
+                <button className="ks-btn utama besar" onClick={cariLokasi}>Coba lagi</button>
+              </>
+            ) : <div className="ks-sub"><span className="ks-spin" aria-hidden="true" /> Mencari lokasimu…</div>
+          )}
+
+          {tahap === "kamera" && (
+            <>
+              <div className="ks-sub" style={{ marginBottom: 8 }}><MapPin size={13} /> Lokasi didapat (akurasi ±{Math.round(lokasi.akurasi)} m). Sekarang ambil selfie.</div>
+              {!pakaiInput && <video ref={videoRef} className="ks-absen-video" playsInline muted autoPlay />}
+              {galatKamera && <div className="ks-banner"><AlertTriangle size={16} /><div>{galatKamera}</div></div>}
+              {pakaiInput ? (
+                <label className="ks-btn utama besar" style={{ display: "flex", justifyContent: "center", cursor: "pointer" }}>
+                  <Camera size={18} /> Ambil foto
+                  <input type="file" accept="image/*" capture="user" onChange={fotoDariInput} style={{ display: "none" }} />
+                </label>
+              ) : (
+                <button className="ks-btn utama besar" onClick={ambilFoto}><Camera size={18} /> Ambil foto</button>
+              )}
+              {pakaiInput && <button className="ks-btn" style={{ marginTop: 8 }} onClick={bukaKamera}>Coba buka kamera lagi</button>}
+            </>
+          )}
+
+          {tahap === "konfirmasi" && foto && (
+            <>
+              <img src={foto.url} alt="Selfie absen" className="ks-absen-foto" />
+              <div className="ks-sub" style={{ margin: "8px 0" }}><MapPin size={13} /> Akurasi lokasi ±{Math.round(lokasi.akurasi)} m</div>
+              <label className="ks-inline" style={{ marginBottom: 8 }}>
+                <input type="checkbox" checked={dinas} onChange={(e) => setDinas(e.target.checked)} style={{ width: "auto" }} /> Saya sedang dinas luar (tugas di luar outlet)
+              </label>
+              {dinas && <Field label="Keterangan dinas luar" lebar><input value={ketDinas} onChange={(e) => setKetDinas(e.target.value)} placeholder="mis. belanja bahan ke pasar" /></Field>}
+              {galat && <div className="ks-banner"><AlertTriangle size={16} /><div>{galat}</div></div>}
+            </>
+          )}
+        </div>
+        {tahap === "konfirmasi" && (
+          <div className="ks-modal-bawah">
+            <button className="ks-btn" disabled={sibuk} onClick={() => { setFoto(null); setGalat(""); setTahap("kamera"); }}>Ambil ulang</button>
+            <TombolSibuk className="ks-btn utama besar" sibuk={sibuk} teksSibuk="Mengirim…" onClick={kirim}>Kirim absen {jenis}</TombolSibuk>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Tampilan Owner ---------- */
+function AbsenOwner({ db, pesan, muatAnomaliAbsen }) {
+  const [tab, setTab] = useState("rekap");
+  const [pengaturan, setPengaturan] = useState(null); // null = memuat, false = gagal
+  const muatPengaturan = () => {
+    supabase.from("pengaturan_absen").select("*").eq("id", true).maybeSingle().then(({ data, error }) => {
+      if (error) { console.error("[Absen] gagal memuat pengaturan:", error); pesan(`Gagal memuat pengaturan absen: ${error.message}`, "alert"); setPengaturan(false); return; }
+      setPengaturan(data || false);
+    });
+  };
+  useEffect(() => { muatPengaturan(); }, []);
+
+  const outletKosong = !!pengaturan && (pengaturan.lokasi_outlet_lat == null || pengaturan.lokasi_outlet_lng == null);
+  const namaKaryawan = (id) => db.karyawan.find((k) => k.id === id)?.nama || "—";
+  const karyawanAbsen = db.karyawan.filter((k) => k.role !== "OWNER" && k.status !== "Nonaktif");
+
+  return (
+    <div>
+      <Head judul="Absen" sub="Rekap kehadiran, anomali yang perlu ditinjau, koreksi, dan pengaturan lokasi outlet." />
+
+      {outletKosong && (
+        <div className="ks-banner">
+          <AlertTriangle size={16} />
+          <div><b>Lokasi outlet belum diisi.</b> Selama kosong, jarak ke outlet tidak dihitung dan anomali "di luar radius" tidak muncul.{" "}
+            <button type="button" className="ks-tautan-kecil" onClick={() => setTab("pengaturan")}>Buka Pengaturan</button></div>
+        </div>
+      )}
+
+      <div className="ks-tab">
+        {[["rekap", "Rekap"], ["anomali", "Anomali"], ["koreksi", "Koreksi"], ["pengaturan", "Pengaturan"]].map(([id, label]) => (
+          <button key={id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>{label}</button>
+        ))}
+      </div>
+
+      {tab === "rekap" && <AbsenRekap db={db} pesan={pesan} namaKaryawan={namaKaryawan} karyawanAbsen={karyawanAbsen} />}
+      {tab === "anomali" && <AbsenAnomali pesan={pesan} namaKaryawan={namaKaryawan} retensi={pengaturan?.retensi_foto_hari || 7} muatAnomaliAbsen={muatAnomaliAbsen} />}
+      {tab === "koreksi" && <AbsenKoreksiOwner pesan={pesan} namaKaryawan={namaKaryawan} />}
+      {tab === "pengaturan" && <AbsenPengaturan pengaturan={pengaturan} muatPengaturan={muatPengaturan} pesan={pesan} />}
+    </div>
+  );
+}
+
+function AbsenRekap({ db, pesan, namaKaryawan, karyawanAbsen }) {
+  const [rekap, setRekap] = useState(null);
+  useEffect(() => {
+    let hidup = true;
+    setRekap(null);
+    supabase.rpc("rekap_absen_periode", { p_periode: db.aktif }).then(({ data, error }) => {
+      if (!hidup) return;
+      if (error) { console.error("[Absen] gagal memuat rekap:", error); pesan(`Gagal memuat rekap absen: ${error.message}`, "alert"); setRekap([]); return; }
+      setRekap(data || []);
+    });
+    return () => { hidup = false; };
+  }, [db.aktif]);
+
+  const [tgl, setTgl] = useState(ymdWIB());
+  const [harian, setHarian] = useState(null);
+  useEffect(() => {
+    let hidup = true;
+    setHarian(null);
+    supabase.from("absen").select("*").eq("tanggal", tgl).then(({ data, error }) => {
+      if (!hidup) return;
+      if (error) { console.error("[Absen] gagal memuat harian:", error); pesan(`Gagal memuat absen harian: ${error.message}`, "alert"); setHarian([]); return; }
+      setHarian(data || []);
+    });
+    return () => { hidup = false; };
+  }, [tgl]);
+
+  const idAktif = new Set(karyawanAbsen.map((k) => k.id));
+  const rekapTampil = (rekap || []).filter((r) => idAktif.has(r.karyawan_id));
+
+  return (
+    <>
+      <Panel judul={`Rekap ${namaPeriode(db.aktif)}`} catatan="Menit terlambat dihitung dari jam mulai shift, hanya untuk absen masuk yang berstatus terlambat.">
+        {rekap === null ? (
+          <table className="ks-tabel rapat"><tbody>{Array.from({ length: 5 }).map((_, i) => <KerangkaBaris key={i} kolom={7} />)}</tbody></table>
+        ) : rekapTampil.length === 0 ? <Kosong teks="Belum ada data absen periode ini." /> : (
+          <table className="ks-tabel rapat">
+            <thead><tr><th>Karyawan</th><th className="r">Hari masuk</th><th className="r">Terlambat</th><th className="r">Menit terlambat</th><th className="r">Pulang cepat</th><th className="r">Tanpa pulang</th><th className="r">Dinas luar</th><th className="r">Anomali</th></tr></thead>
+            <tbody>
+              {rekapTampil.map((r) => (
+                <tr key={r.karyawan_id}>
+                  <td>{r.nama}</td>
+                  <td className="r n">{r.hari_masuk}</td>
+                  <td className="r n">{r.jumlah_terlambat}</td>
+                  <td className={"r n" + (r.menit_terlambat > 0 ? " minus" : "")}>{r.menit_terlambat}</td>
+                  <td className="r n">{r.hari_pulang_cepat}</td>
+                  <td className="r n">{r.hari_tanpa_pulang}</td>
+                  <td className="r n">{r.hari_dinas_luar}</td>
+                  <td className="r n">{r.jumlah_anomali}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+
+      <Panel judul="Absen harian" aksi={<input type="date" value={tgl} max={ymdWIB()} onChange={(e) => setTgl(e.target.value)} className="ks-mini-input" />}>
+        {harian === null ? (
+          <table className="ks-tabel rapat"><tbody>{Array.from({ length: 5 }).map((_, i) => <KerangkaBaris key={i} kolom={5} />)}</tbody></table>
+        ) : (
+          <table className="ks-tabel rapat">
+            <thead><tr><th>Karyawan</th><th>Masuk</th><th>Pulang</th><th className="r">Jarak</th><th>Tanda</th></tr></thead>
+            <tbody>
+              {karyawanAbsen.map((k) => {
+                const m = harian.find((x) => x.karyawan_id === k.id && x.jenis === "masuk");
+                const p = harian.find((x) => x.karyawan_id === k.id && x.jenis === "pulang");
+                const tanda = [...new Set([...(m?.anomali || []), ...(p?.anomali || [])])];
+                const sel = (a) => (a ? (
+                  <><b className="n">{jamWIB(a.waktu)}</b>{" "}<span className={"ks-status " + (KELAS_STATUS_ABSEN[a.status] || "")}>{LABEL_STATUS_ABSEN[a.status] || a.status}</span></>
+                ) : <span className="ks-sub">—</span>);
+                return (
+                  <tr key={k.id}>
+                    <td>{namaKaryawan(k.id)}</td>
+                    <td>{sel(m)}</td>
+                    <td>{sel(p)}</td>
+                    <td className="r n">{m?.jarak_dari_outlet_m != null ? `${num(m.jarak_dari_outlet_m, 0)} m` : "—"}</td>
+                    <td>{tanda.map((x) => <ChipAnomali key={x} kode={x} />)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+    </>
+  );
+}
+
+function AbsenAnomali({ pesan, namaKaryawan, retensi, muatAnomaliAbsen }) {
+  const [daftar, setDaftar] = useState(null);
+  const [foto, setFoto] = useState(null); // { url, judul }
+  const [sibukId, setSibukId] = useState(null);
+
+  const muat = () => {
+    supabase.rpc("absen_anomali_daftar").then(({ data, error }) => {
+      if (error) { console.error("[Absen] gagal memuat anomali:", error); pesan(`Gagal memuat anomali: ${error.message}`, "alert"); setDaftar([]); return; }
+      setDaftar(data || []);
+    });
+  };
+  useEffect(muat, []);
+
+  const lihatFoto = async (a) => {
+    setSibukId(a.id + "foto");
+    const { data, error } = await supabase.storage.from(BUCKET_FOTO_ABSEN).createSignedUrl(a.foto_path, 120);
+    setSibukId(null);
+    if (error) { pesan(`Foto tidak bisa dibuka: ${error.message}`, "alert"); return; }
+    setFoto({ url: data.signedUrl, judul: `${namaKaryawan(a.karyawan_id)} · ${tglPendek(a.tanggal)} ${jamWIB(a.waktu)} (${a.jenis})` });
+  };
+  const tandai = async (a) => {
+    setSibukId(a.id);
+    const { error } = await supabase.rpc("tinjau_absen", { p_id: a.id });
+    setSibukId(null);
+    if (error) { pesan(`Gagal menandai ditinjau: ${error.message}`, "alert"); return; }
+    pesan("Ditandai sudah ditinjau.");
+    muat();
+    muatAnomaliAbsen?.();
+  };
+
+  const sisaFoto = (a) => {
+    if (a.foto_dihapus_pada || !a.foto_path) return null;
+    return Math.max(0, retensi - selisihHariYmd(ymdWIB(), a.tanggal));
+  };
+
+  return (
+    <Panel judul="Anomali belum ditinjau" catatan="Absen tetap tersimpan -- tanda ini cuma minta ditinjau manual. Foto terhapus otomatis setelah masa simpan.">
+      {daftar === null ? (
+        <table className="ks-tabel rapat"><tbody>{Array.from({ length: 4 }).map((_, i) => <KerangkaBaris key={i} kolom={4} />)}</tbody></table>
+      ) : daftar.length === 0 ? <Kosong teks="Tidak ada anomali yang menunggu. Bagus." /> : (
+        <table className="ks-tabel rapat">
+          <thead><tr><th>Karyawan</th><th>Absen</th><th>Tanda</th><th></th></tr></thead>
+          <tbody>
+            {daftar.map((a) => {
+              const sisa = sisaFoto(a);
+              return (
+                <tr key={a.id}>
+                  <td>{namaKaryawan(a.karyawan_id)}</td>
+                  <td>
+                    <b className="n">{tglPendek(a.tanggal)} {jamWIB(a.waktu)}</b> · {a.jenis}
+                    <div><span className={"ks-status " + (KELAS_STATUS_ABSEN[a.status] || "")}>{LABEL_STATUS_ABSEN[a.status] || a.status}</span>
+                      {a.jarak_dari_outlet_m != null && <span className="ks-sub"> {num(a.jarak_dari_outlet_m, 0)} m dari outlet</span>}
+                      {a.akurasi_m != null && <span className="ks-sub"> · akurasi ±{num(a.akurasi_m, 0)} m</span>}</div>
+                    {a.dinas_luar && <div className="ks-sub">Dinas luar: {a.keterangan_dinas}</div>}
+                  </td>
+                  <td>{(a.anomali || []).map((k) => <ChipAnomali key={k} kode={k} />)}</td>
+                  <td className="r">
+                    {a.foto_path
+                      ? <TombolSibuk className="ks-btn kecil" sibuk={sibukId === a.id + "foto"} teksSibuk="Membuka…" onClick={() => lihatFoto(a)}>Lihat foto</TombolSibuk>
+                      : <span className="ks-sub">Foto sudah dihapus</span>}
+                    {sisa != null && <div className="ks-sub">terhapus {sisa === 0 ? "hari ini" : `${sisa} hari lagi`}</div>}
+                    <TombolSibuk className="ks-btn kecil" sibuk={sibukId === a.id} teksSibuk="Menyimpan…" onClick={() => tandai(a)}>Tandai ditinjau</TombolSibuk>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+
+      {foto && (
+        <div className="ks-modal-bg" onClick={() => setFoto(null)}>
+          <div className="ks-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="ks-modal-atas"><h3>{foto.judul}</h3><button className="ks-ikon" onClick={() => setFoto(null)}><X size={16} /></button></div>
+            <div className="ks-modal-isi"><img src={foto.url} alt="Foto absen" className="ks-absen-foto" /></div>
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function AbsenKoreksiOwner({ pesan, namaKaryawan }) {
+  const [daftar, setDaftar] = useState(null);
+  const [absenAda, setAbsenAda] = useState([]);
+  const [balasan, setBalasan] = useState({});
+  const [sibukId, setSibukId] = useState(null);
+
+  const muat = async () => {
+    const { data, error } = await supabase.from("absen_koreksi").select("*").order("dibuat", { ascending: false }).limit(60);
+    if (error) { console.error("[Absen] gagal memuat koreksi:", error); pesan(`Gagal memuat koreksi: ${error.message}`, "alert"); setDaftar([]); return; }
+    const list = data || [];
+    setDaftar(list);
+    const menunggu = list.filter((k) => k.status === "menunggu");
+    if (!menunggu.length) { setAbsenAda([]); return; }
+    const { data: ada } = await supabase.from("absen").select("karyawan_id,tanggal,jenis,waktu,status")
+      .in("karyawan_id", [...new Set(menunggu.map((k) => k.karyawan_id))])
+      .in("tanggal", [...new Set(menunggu.map((k) => k.tanggal))]);
+    setAbsenAda(ada || []);
+  };
+  useEffect(() => { muat(); }, []);
+
+  const putuskan = async (k, setuju) => {
+    setSibukId(k.id + setuju);
+    const { error } = await supabase.rpc("putuskan_koreksi_absen", { p_id: k.id, p_setuju: setuju, p_balasan: (balasan[k.id] || "").trim() || null });
+    setSibukId(null);
+    if (error) { pesan(`Gagal memutuskan koreksi: ${error.message}`, "alert"); return; }
+    pesan(setuju ? "Koreksi disetujui, absen diperbarui." : "Koreksi ditolak.");
+    muat();
+  };
+
+  const menunggu = (daftar || []).filter((k) => k.status === "menunggu");
+  const selesai = (daftar || []).filter((k) => k.status !== "menunggu").slice(0, 20);
+
+  return (
+    <>
+      <Panel judul={`Menunggu diputuskan${daftar ? ` (${menunggu.length})` : ""}`}>
+        {daftar === null ? (
+          <table className="ks-tabel rapat"><tbody>{Array.from({ length: 3 }).map((_, i) => <KerangkaBaris key={i} kolom={4} />)}</tbody></table>
+        ) : menunggu.length === 0 ? <Kosong teks="Tidak ada pengajuan koreksi yang menunggu." /> : (
+          <table className="ks-tabel rapat">
+            <thead><tr><th>Karyawan</th><th>Diajukan</th><th>Alasan</th><th></th></tr></thead>
+            <tbody>
+              {menunggu.map((k) => {
+                const ada = absenAda.find((a) => a.karyawan_id === k.karyawan_id && a.tanggal === k.tanggal && a.jenis === k.jenis);
+                return (
+                  <tr key={k.id}>
+                    <td>{namaKaryawan(k.karyawan_id)}</td>
+                    <td>
+                      <b className="n">{tglPendek(k.tanggal)} {String(k.jam_diajukan).slice(0, 5)}</b> · {k.jenis}
+                      <div className="ks-sub">{ada ? `Tercatat sekarang: ${jamWIB(ada.waktu)} (${LABEL_STATUS_ABSEN[ada.status] || ada.status})` : "Belum ada absen tercatat"}</div>
+                    </td>
+                    <td>{k.alasan}</td>
+                    <td className="r">
+                      <input className="ks-mini-input" placeholder="Balasan (opsional)" value={balasan[k.id] || ""} onChange={(e) => setBalasan({ ...balasan, [k.id]: e.target.value })} />
+                      <div className="ks-inline" style={{ marginTop: 6, justifyContent: "flex-end" }}>
+                        <TombolSibuk className="ks-btn kecil" sibuk={sibukId === k.id + false} teksSibuk="Menyimpan…" disabled={!!sibukId} onClick={() => putuskan(k, false)}>Tolak</TombolSibuk>
+                        <TombolSibuk className="ks-btn kecil utama" sibuk={sibukId === k.id + true} teksSibuk="Menyimpan…" disabled={!!sibukId} onClick={() => putuskan(k, true)}>Setujui</TombolSibuk>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Panel>
+
+      {selesai.length > 0 && (
+        <Panel judul="Sudah diputuskan (terakhir)">
+          <table className="ks-tabel rapat">
+            <thead><tr><th>Karyawan</th><th>Koreksi</th><th>Status</th></tr></thead>
+            <tbody>
+              {selesai.map((k) => (
+                <tr key={k.id}>
+                  <td>{namaKaryawan(k.karyawan_id)}</td>
+                  <td className="n">{tglPendek(k.tanggal)} {String(k.jam_diajukan).slice(0, 5)} · {k.jenis}</td>
+                  <td><span className={"ks-status " + (k.status === "disetujui" ? "dibeli" : "ditolak")}>{k.status}</span>{k.balasan && <div className="ks-sub">{k.balasan}</div>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+    </>
+  );
+}
+
+function AbsenPengaturan({ pengaturan, muatPengaturan, pesan }) {
+  const dari = (p) => ({
+    lat: p?.lokasi_outlet_lat != null ? String(p.lokasi_outlet_lat) : "",
+    lng: p?.lokasi_outlet_lng != null ? String(p.lokasi_outlet_lng) : "",
+    radius: String(p?.radius_m ?? 100),
+    toleransi: String(p?.toleransi_terlambat_menit ?? 10),
+    akurasi: String(p?.akurasi_gps_maks_m ?? 50),
+    retensi: String(p?.retensi_foto_hari ?? 7),
+    pulangWajib: p?.absen_pulang_wajib ?? true,
+    blok: p?.blok_di_luar_radius ?? false,
+  });
+  const [f, setF] = useState(dari(pengaturan));
+  const [sibuk, setSibuk] = useState(false);
+  const [sibukLokasi, setSibukLokasi] = useState(false);
+  useEffect(() => { if (pengaturan) setF(dari(pengaturan)); }, [pengaturan]);
+
+  const pakaiLokasiSaya = async () => {
+    setSibukLokasi(true);
+    try {
+      const l = await ambilLokasiAbsen();
+      setF((x) => ({ ...x, lat: l.lat.toFixed(6), lng: l.lng.toFixed(6) }));
+      pesan(`Lokasi terisi (akurasi ±${Math.round(l.akurasi)} m). Tekan Simpan untuk menerapkan.`);
+    } catch (e) {
+      pesan(pesanGalatLokasi(e), "alert");
+    }
+    setSibukLokasi(false);
+  };
+
+  const simpan = async () => {
+    const lat = f.lat.trim() === "" ? null : parseFloat(f.lat);
+    const lng = f.lng.trim() === "" ? null : parseFloat(f.lng);
+    if ((lat === null) !== (lng === null)) { pesan("Isi lintang dan bujur sekaligus, atau kosongkan keduanya.", "alert"); return; }
+    if (lat !== null && (!(lat >= -90 && lat <= 90) || !(lng >= -180 && lng <= 180))) { pesan("Koordinat di luar rentang yang masuk akal.", "alert"); return; }
+    const radius = parseInt(f.radius, 10), toleransi = parseInt(f.toleransi, 10), akurasi = parseInt(f.akurasi, 10), retensi = parseInt(f.retensi, 10);
+    if (!(radius > 0) || !(akurasi > 0) || !(retensi > 0) || !(toleransi >= 0)) { pesan("Radius, akurasi, dan masa simpan foto harus lebih dari 0; toleransi tidak boleh minus.", "alert"); return; }
+    setSibuk(true);
+    const { data, error } = await supabase.from("pengaturan_absen").update({
+      lokasi_outlet_lat: lat, lokasi_outlet_lng: lng, radius_m: radius, toleransi_terlambat_menit: toleransi,
+      akurasi_gps_maks_m: akurasi, retensi_foto_hari: retensi, absen_pulang_wajib: !!f.pulangWajib, blok_di_luar_radius: !!f.blok,
+    }).eq("id", true).select();
+    setSibuk(false);
+    if (error) { pesan(`Gagal menyimpan pengaturan: ${error.message}`, "alert"); return; }
+    if (!data || data.length === 0) { pesan("Tidak ada yang tersimpan. Pastikan kamu masuk sebagai Owner dan migrasi absen sudah dijalankan.", "alert"); return; }
+    pesan("Pengaturan absen tersimpan.");
+    muatPengaturan();
+  };
+
+  if (pengaturan === null) return <Panel judul="Pengaturan absen"><KerangkaKartu /></Panel>;
+  if (pengaturan === false) return <Panel judul="Pengaturan absen"><Kosong teks="Pengaturan belum bisa dimuat. Pastikan migrasi absen sudah dijalankan di Supabase." /></Panel>;
+
+  return (
+    <Panel judul="Pengaturan absen" catatan="Berlaku untuk semua karyawan. Datang ke outlet lalu tekan 'Pakai lokasi saya sekarang' untuk mengisi koordinat.">
+      <div className="ks-form">
+        <Field label="Lintang outlet"><input type="number" step="any" value={f.lat} onChange={(e) => setF({ ...f, lat: e.target.value })} placeholder="mis. -6.917464" /></Field>
+        <Field label="Bujur outlet"><input type="number" step="any" value={f.lng} onChange={(e) => setF({ ...f, lng: e.target.value })} placeholder="mis. 107.619125" /></Field>
+        <Field label="" lebar>
+          <TombolSibuk className="ks-btn" sibuk={sibukLokasi} teksSibuk="Mencari lokasi…" onClick={pakaiLokasiSaya}><MapPin size={14} /> Pakai lokasi saya sekarang</TombolSibuk>
+        </Field>
+        <Field label="Radius outlet (meter)"><input type="number" value={f.radius} onChange={(e) => setF({ ...f, radius: e.target.value })} /></Field>
+        <Field label="Toleransi terlambat (menit)"><input type="number" value={f.toleransi} onChange={(e) => setF({ ...f, toleransi: e.target.value })} /></Field>
+        <Field label="Akurasi GPS maksimal (meter)"><input type="number" value={f.akurasi} onChange={(e) => setF({ ...f, akurasi: e.target.value })} /></Field>
+        <Field label="Foto disimpan (hari)"><input type="number" value={f.retensi} onChange={(e) => setF({ ...f, retensi: e.target.value })} /></Field>
+        <Field label="" lebar>
+          <label className="ks-inline"><input type="checkbox" checked={f.pulangWajib} onChange={(e) => setF({ ...f, pulangWajib: e.target.checked })} style={{ width: "auto" }} /> Absen pulang wajib (yang tidak absen pulang ditandai)</label>
+        </Field>
+        <Field label="" lebar>
+          <label className="ks-inline"><input type="checkbox" checked={f.blok} onChange={(e) => setF({ ...f, blok: e.target.checked })} style={{ width: "auto" }} /> Tolak absen di luar radius (kecuali dinas luar). Kalau mati, absen tetap tersimpan dan hanya ditandai.</label>
+        </Field>
+      </div>
+      <div className="ks-baris-aksi kanan">
+        <TombolSibuk className="ks-btn utama besar" sibuk={sibuk} teksSibuk="Menyimpan…" onClick={simpan}>Simpan pengaturan</TombolSibuk>
+      </div>
+    </Panel>
+  );
+}
+
 function DialInHal({ db, pesan, aku, peran }) {
   // Akses: OWNER/HEAD_BAR dan seluruh karyawan divisi BAR dapat panel
   // "penuh" (setelan hari ini, catat, riwayat). Panel Acuan cuma OWNER/
@@ -11641,4 +12450,12 @@ const CSS13 = `
 .ks-nav-grup-isi{display:flex;flex-direction:column;gap:1px;margin-bottom:4px;}
 .ks-nav-grup-bungkus.sheet .ks-nav-grup-judul{color:var(--kabur);}
 .ks-nav-grup-bungkus.sheet .ks-nav-grup-judul:hover{color:var(--ink);}
+
+/* Absen kehadiran -- mobile-first: tombol besar, video selfie portrait */
+.ks-absen-besar{width:100%;justify-content:center;gap:10px;min-height:64px;font-size:17px;margin-top:14px;}
+.ks-absen-baris{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--garis);font-size:14px;}
+.ks-absen-video{width:100%;aspect-ratio:3/4;max-height:58vh;object-fit:cover;border-radius:12px;background:#000;transform:scaleX(-1);margin-bottom:10px;}
+.ks-absen-foto{width:100%;max-height:60vh;object-fit:contain;border-radius:12px;background:#000;}
+.ks-chip-anomali{display:inline-block;margin:3px 4px 0 0;padding:2px 8px;border-radius:10px;background:#FBF1DB;color:#7A5410;font-size:11px;font-weight:600;}
+.ks-absen-daftar{margin:8px 0 0;padding-left:18px;font-size:13.5px;line-height:1.7;}
 `;
