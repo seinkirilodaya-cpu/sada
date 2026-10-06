@@ -3602,6 +3602,8 @@ function MasterBahan({ db, simpan, H, pesan, pesanHitung, muatUlang, setNav, set
     const bagian = [
       [j.resep, "resep"], [j.belanja, "catatan belanja"], [j.opname, "catatan opname"],
       [j.opname_harian, "catatan opname harian"], [j.permintaan, "permintaan"], [j.nota, "baris daftar belanja"],
+      [j.resep_produksi, "resep produksi"], [j.produksi, "catatan produksi"],
+      [j.produksi_buang, "catatan produksi terbuang"], [j.dial_in, "catatan dial in"],
     ].filter(([n]) => n > 0).map(([n, label]) => `${n} ${label}`);
     if (!bagian.length) return "Tidak bisa dihapus.";
     const teks = bagian.length === 1 ? bagian[0]
@@ -3759,7 +3761,9 @@ function MasterBahan({ db, simpan, H, pesan, pesanHitung, muatUlang, setNav, set
               ) : (
                 <div className="ks-jejak-kartu">
                   {[["Resep", jejak.resep], ["Belanja", jejak.belanja], ["Opname", jejak.opname],
-                    ["Opname harian", jejak.opname_harian], ["Permintaan", jejak.permintaan], ["Daftar belanja", jejak.nota]].map(([label, n]) => (
+                    ["Opname harian", jejak.opname_harian], ["Permintaan", jejak.permintaan], ["Daftar belanja", jejak.nota],
+                    ["Resep produksi", jejak.resep_produksi], ["Produksi", jejak.produksi],
+                    ["Produksi terbuang", jejak.produksi_buang], ["Dial in", jejak.dial_in]].map(([label, n]) => (
                     <div key={label} style={!n ? { opacity: .5 } : undefined}><span className="ks-sub">{label}</span><b>{n ?? 0}</b></div>
                   ))}
                 </div>
