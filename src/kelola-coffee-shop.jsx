@@ -194,6 +194,27 @@ async function ambilAman(nama, janji, lapor) {
   return data || [];
 }
 
+// Supabase/PostgREST cuma mengembalikan 1000 baris pertama per permintaan --
+// diam-diam terpotong, TANPA error, kalau lebih dari itu. Di Sada ini yang
+// membuat data Opname harian "hilang" setelah refresh begitu isi bulan itu
+// tembus 1000 baris (mulai 21 Okt 2026): barisnya aman di database, tapi tidak
+// pernah dimuat balik. Fungsi ini mengambil per 1000 baris sampai habis.
+// buatQuery HARUS mengembalikan query BARU tiap dipanggil (bukan promise yang
+// sudah jalan) dan HARUS punya .order() yang unik -- tanpa urutan yang pasti,
+// halaman bisa tumpang tindih atau ada baris yang terlewat.
+async function ambilSemuaHalaman(buatQuery, ukuran = 1000) {
+  let semua = [];
+  let dari = 0;
+  while (true) {
+    const { data, error } = await buatQuery().range(dari, dari + ukuran - 1);
+    if (error) throw error;
+    semua = semua.concat(data || []);
+    if (!data || data.length < ukuran) break;
+    dari += ukuran;
+  }
+  return semua;
+}
+
 async function muatDb(periode, lapor, tahap) {
   // tahap(...) melaporkan progres NYATA ke Tirai halaman (lihat Splash) --
   // dipanggil persis di depan tiap kelompok query besar, jadi teksnya
@@ -207,14 +228,13 @@ async function muatDb(periode, lapor, tahap) {
   if (eBahan) throw eBahan;
   const petaBahan = new Map(bahanRows.map((b, i) => [b.id, i]));
 
-  const [{ data: belanjaRows, error: eBelanja }, { data: opnameRows, error: eOpname },
+  const [belanjaRows, { data: opnameRows, error: eOpname },
          { data: produksiRows, error: eProduksi }, { data: produksiBuangRows, error: eProduksiBuang }] = await Promise.all([
-    supabase.from("belanja").select("*").eq("periode", periode),
+    ambilSemuaHalaman(() => supabase.from("belanja").select("*").eq("periode", periode).order("id")),
     supabase.from("opname").select("*").eq("periode", periode),
     supabase.from("produksi").select("id,tanggal,bahan_hasil_id,hasil_nyata").eq("periode", periode),
     supabase.from("produksi_buang").select("tanggal,bahan_id,qty").eq("periode", periode),
   ]);
-  if (eBelanja) throw eBelanja;
   if (eOpname) throw eOpname;
   if (eProduksi) console.warn(`[muatDb] gagal memuat "produksi": ${eProduksi.message}`);
   if (eProduksiBuang) console.warn(`[muatDb] gagal memuat "produksi_buang": ${eProduksiBuang.message}`);
@@ -280,12 +300,11 @@ async function muatDb(periode, lapor, tahap) {
   if (eMenu) throw eMenu;
   const petaMenu = new Map(menuRows.map((m, i) => [m.id, i]));
 
-  const [{ data: resepRows, error: eResep }, { data: penjualanRows, error: ePenjualan }] = await Promise.all([
+  const [{ data: resepRows, error: eResep }, penjualanRows] = await Promise.all([
     supabase.from("resep").select("*"),
-    supabase.from("penjualan").select("*").eq("periode", periode),
+    ambilSemuaHalaman(() => supabase.from("penjualan").select("*").eq("periode", periode).order("tanggal").order("menu_id").order("kanal")),
   ]);
   if (eResep) throw eResep;
-  if (ePenjualan) throw ePenjualan;
 
   const resepPerMenu = {};
   let resepHilang = 0;
@@ -340,8 +359,7 @@ async function muatDb(periode, lapor, tahap) {
   const divisiKaryawan = new Map(karyawanRows.map((k) => [k.id, k.divisi]));
 
   tahap?.("Memuat permintaan & nota belanja…");
-  const { data: permintaanRows, error: ePermintaan } = await supabase.from("permintaan").select("*").order("dibuat");
-  if (ePermintaan) throw ePermintaan;
+  const permintaanRows = await ambilSemuaHalaman(() => supabase.from("permintaan").select("*").order("dibuat").order("id"));
   let requestHilang = 0;
   const request = permintaanRows.map((r) => {
     const idxBahan = petaBahan.get(r.bahan_id);
@@ -368,10 +386,9 @@ async function muatDb(periode, lapor, tahap) {
 
   const { data: notaRows, error: eNota } = await supabase.from("nota").select("*").eq("periode", periode).order("tanggal");
   if (eNota) throw eNota;
-  const { data: notaBarisRows, error: eNotaBaris } = notaRows.length
-    ? await supabase.from("nota_baris").select("*").in("nota_id", notaRows.map((n) => n.id))
-    : { data: [], error: null };
-  if (eNotaBaris) throw eNotaBaris;
+  const notaBarisRows = notaRows.length
+    ? await ambilSemuaHalaman(() => supabase.from("nota_baris").select("*").in("nota_id", notaRows.map((n) => n.id)).order("id"))
+    : [];
 
   const barisPerNota = {};
   let notaBarisHilang = 0;
@@ -423,16 +440,15 @@ async function muatDb(periode, lapor, tahap) {
 
   tahap?.("Memuat jadwal…");
   const [{ data: jadwalRows, error: eJadwal }, { data: lemburRows, error: eLembur },
-    { data: pengaturanRow, error: ePengaturan }, { data: harianRows, error: eHarian }] = await Promise.all([
+    { data: pengaturanRow, error: ePengaturan }, harianRows] = await Promise.all([
     supabase.from("jadwal").select("*").eq("periode", periode),
     supabase.from("lembur").select("*").eq("periode", periode),
     supabase.from("pengaturan").select("*").eq("periode", periode).maybeSingle(),
-    supabase.from("opname_harian").select("*").eq("periode", periode),
+    ambilSemuaHalaman(() => supabase.from("opname_harian").select("*").eq("periode", periode).order("tanggal").order("bahan_id")),
   ]);
   if (eJadwal) throw eJadwal;
   if (eLembur) throw eLembur;
   if (ePengaturan) throw ePengaturan;
-  if (eHarian) throw eHarian;
 
   const jadwal = {};
   (jadwalRows || []).forEach((r) => { jadwal[kunciJadwal(r.karyawan_id, r.tanggal)] = r.kode; });
@@ -568,13 +584,27 @@ async function tulisOpnameHarian(lama, baru, db) {
     }
   });
   if (upsert.length) {
-    const { error } = await supabase.from("opname_harian").upsert(upsert, { onConflict: "periode,tanggal,bahan_id" });
+    const { data, error } = await supabase.from("opname_harian")
+      .upsert(upsert, { onConflict: "periode,tanggal,bahan_id" }).select("tanggal,bahan_id");
     if (error) throw error;
+    // Server harus mengembalikan SEMUA baris yang dikirim. Kalau lebih sedikit,
+    // sebagian ditolak diam-diam (mis. aturan akses) -- jangan dianggap tersimpan.
+    if ((data || []).length !== upsert.length) {
+      throw new Error(`Server cuma mengonfirmasi ${(data || []).length} dari ${upsert.length} baris opname harian.`);
+    }
   }
   for (const h of hapus) {
-    const { error } = await supabase.from("opname_harian").delete()
-      .eq("periode", db.aktif).eq("tanggal", h.tanggal).eq("bahan_id", h.bahan_id);
+    const { data, error } = await supabase.from("opname_harian").delete()
+      .eq("periode", db.aktif).eq("tanggal", h.tanggal).eq("bahan_id", h.bahan_id).select("tanggal");
     if (error) throw error;
+    if ((data || []).length === 0) {
+      // 0 baris terhapus wajar kalau barisnya memang tidak ada di server. Kalau
+      // masih ada, penghapusannya ditolak diam-diam (aturan akses).
+      const { data: sisa, error: eSisa } = await supabase.from("opname_harian").select("tanggal")
+        .eq("periode", db.aktif).eq("tanggal", h.tanggal).eq("bahan_id", h.bahan_id);
+      if (eSisa) throw eSisa;
+      if ((sisa || []).length > 0) throw new Error(`Penghapusan opname harian tanggal ${h.tanggal} ditolak server (kemungkinan aturan akses).`);
+    }
   }
 }
 
@@ -1277,6 +1307,9 @@ export default function App() {
     // saling menimpa kalau dibiarkan jalan bersamaan. Antrean ini memastikan
     // tiap penulisan selesai dulu sebelum yang berikutnya mulai.
     sedangMenyimpan.current++;
+    // true hanya kalau SEMUA area yang diubah panggilan INI dikonfirmasi server.
+    // Dipakai halaman yang mau menampilkan "tersimpan" setelah server menjawab.
+    let sukses = true;
     antreanSimpan.current = antreanSimpan.current.then(async () => {
       const gagal = [];
       for (const area of Object.keys(AREA_TULIS)) {
@@ -1291,13 +1324,17 @@ export default function App() {
           gagal.push(`${area}: ${rincian}`);
         }
       }
-      if (gagal.length) pesan(`Gagal tersimpan ke server —\n${gagal.join("\n")}`, "alert");
+      if (gagal.length) {
+        sukses = false;
+        pesan(`GAGAL tersimpan ke server — angka di layar BELUM tersimpan. Jangan tutup atau muat ulang halaman, coba isi lagi.\n${gagal.join("\n")}`, "alert");
+      }
     }).finally(() => { sedangMenyimpan.current--; });
     await antreanSimpan.current;
 
     // Area yang belum punya penulis Supabase (lihat AREA_TULIS) masih ditampung
     // di sini sementara, supaya tidak hilang kalau halaman di-refresh dalam sesi yang sama.
     try { await window.storage.set(KEY, JSON.stringify(next)); } catch { /* boleh gagal, cuma cadangan sesi ini */ }
+    return sukses;
   };
   // Selalu sinkron dengan jenis toast yang SEDANG tampil -- dipakai supaya
   // pesan()/pesanHitung() tidak salah baca lewat closure yang sudah basi.
@@ -6798,11 +6835,13 @@ function OpnameHarian({ db, simpan, pesan, pesanHitung, H, aku, peran }) {
 
   const kunciH = (d, i) => `${d}-${i}`;
   const isi = db.harian || {};
-  const set = (i, v) => {
+  const set = async (i, v) => {
     const h = { ...isi };
     if (v === "") delete h[kunciH(tgl, i)]; else h[kunciH(tgl, i)] = parseFloat(v) || 0;
-    simpan({ ...db, harian: h });
-    pesanHitung("harian", "Opname harian", "bahan");
+    // Toast "tersimpan" baru muncul SETELAH server mengonfirmasi (simpan()
+    // mengembalikan true). Kalau gagal, toast merah dari simpan() yang tampil.
+    const berhasil = await simpan({ ...db, harian: h });
+    if (berhasil) pesanHitung("harian", "Opname harian", "bahan");
   };
   const togglePantau = (i) => {
     simpan({ ...db, bahan: db.bahan.map((b, x) => (x === i ? { ...b, pantau: b.pantau ? 0 : 1 } : b)) });
